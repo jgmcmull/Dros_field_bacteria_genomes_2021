@@ -1,0 +1,2563 @@
+---
+title: "McMullen et al Data preparation and data analysis"
+author: "John McMullen"
+date: "2/21/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+#Data preparation --> RAST functional categories
+
+##Import RAST functional categories data (includes gene ids and all the RAST subsystem categories). Requires .txt files generated from RAST.
+```{r}
+#Note: must run the entire code chunk here
+setwd("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/RAST_subsystems")
+dat.list = list.files(pattern = "*.txt") #import RAST files with the following pattern in the folder
+dat = lapply(dat.list, read.delim) #lapply will take the files and import them into r into a dataframe
+```
+
+##Preparation of RAST subcategory data for data analysis. Combines all of the RAST .txt files for each taxa into a single dataframe, and counts subcategories related to primary metabolism.
+```{r}
+library(plyr)
+library(reshape2)
+
+#Metadata associated with taxonomic information and strain IDs
+ids = read.csv('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Comparative_genomics_proj/genome_meta_data_RAST.csv')
+sum.list = list() #create an open list used to add in the frequency counts of subsystems
+
+#The following for loop will do a frequency count of the number of times the subsystem comes up.
+for(i in 1:length(dat)) {
+  sum.list[[i]] <- count(dat[[i]],colnames(dat[[i]])[1:4])
+}
+
+#do.call is a function that will apply a function to a list of dataframes --> so, the lists are combined by row, as all the columns are the same.
+subsystems = do.call(rbind,sum.list)
+
+check = unique(subsystems[2:4])#visual check of RAST groupings
+
+#using subset function to find which groupings to keep
+subsystems.sorted = subset(subsystems,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(subsystems))
+
+check2 = unique(subsystems.sorted[2:4])#visual check of RAST groupings
+
+#using subset function to find which groupings to remove
+subsystems.sorted2 = subset(subsystems.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(subsystems.sorted))
+
+check3 = unique(subsystems.sorted2[2:4])#visual check of RAST groupings
+
+#replaced the no subcategory IDs with Other to simplify groupings... most would be okay to elevate the subsystem name to the subcategory level, but some of the carbodyrates groupings are not useful/interpretable. Also note: CBSS  = Clustering-based subsystems
+subsystems.sorted2$Subcategory = as.character(subsystems.sorted2$Subcategory) #change to character for the for/if statements
+
+for(i in 1:nrow(subsystems.sorted2)) {
+  if(grepl('no subcategory',subsystems.sorted2[i,3]) & subsystems.sorted2[i,2] %in% 'Amino Acids and Derivatives') {
+    subsystems.sorted2[i,3] <- 'Other_AA'
+  }
+  if(grepl('no subcategory',subsystems.sorted2[i,3]) & subsystems.sorted2[i,2] %in% 'Carbohydrates') {
+    subsystems.sorted2[i,3] <- 'Other_Carbs'
+  }
+  if(grepl('no subcategory',subsystems.sorted2[i,3]) & subsystems.sorted2[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments') {
+    subsystems.sorted2[i,3] <- 'Other_Vits'
+  }
+  if(grepl('no subcategory',subsystems.sorted2[i,3]) & subsystems.sorted2[i,2] %in% 'Nitrogen Metabolism') {
+    subsystems.sorted2[i,3] <- 'Other_N'
+  }
+}
+
+subsystems.sorted2$Subcategory = as.factor(subsystems.sorted2$Subcategory) #change to factor
+
+#Change the data from long to wide format by calculating the sum for each RAST category and subcategory, (after the first two columns) the rows are the RAST categories and taxa are the columns.
+subs = dcast(subsystems.sorted2,Category+Subcategory ~ ID,value.var = 'freq',fun.aggregate = sum)
+
+cats = subs[,1:2] #RAST categories
+
+row.names(subs) = subs$Subcategory
+
+subs = subs[,3:98] #RAST counts
+
+#the subs.taxa are the total counts
+subs.taxa = t(subs) #need to transpose so the categories are column headers
+
+subs.taxa = cbind(ids,subs.taxa) #add the taxa strain ids
+
+check4 = unique(subsystems.sorted2[2:3])#visual check of RAST groupings
+
+write.csv(subs.taxa,'/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/RAST_met_taxa_freq.csv') #Becomes Dataset S3B
+
+#This is the entire count of all subsystems in RAST dataset. Similar procedure as above, except no removal of any of the subcategories.
+total.func = dcast(subsystems,Category+Subcategory ~ ID,value.var = 'freq',fun.aggregate = sum)
+total.func2 = t(total.func[,3:98])
+colnames(total.func2) <- total.func$Subcategory
+total.func.taxa = cbind(ids,total.func2)
+
+write.csv(total.func.taxa,'/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/RAST_total_taxa_freq.csv') #Becomes Dataset S3A
+```
+
+#Data preparation --> identify orthogroups that are metabolism-related (based on RAST)
+#select orthogroups for the metabolism-related functions
+```{r}
+#must run the entire code chunk here
+setwd("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/RAST_subsystems/rename")
+dat.list = list.files(pattern = "*.txt") #import files with the following pattern in the folder
+dat = lapply(dat.list, read.delim) #lapply will take the files and import them into r into a dataframe
+```
+
+##generate presence/absence matrix for the entire list of orthogroups and the subset that are metabolism-related (includes the subset for the pangenome analysis also)
+```{r}
+library(tidyr)
+library(dplyr)
+ogs = read.delim("/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups.tsv")
+ogs.count = read.delim("/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups.GeneCount.tsv")
+
+
+#using the subsystem curated set, find all of the gene in the original rast file (check3) and make sure there are no duplications of gene ids (fasta header names for CDS)
+met.func.expanded = list()
+
+for (i in 1:length(dat)) {
+  met.func.expanded[[i]] <- dat[[i]] %>% separate_rows(Features,sep = ", ")
+}
+
+met.func.only = list()
+
+for(i in 1:length(met.func.expanded)) {
+  x <- subset(met.func.expanded[[i]],Subsystem %in% check3$Subsystem,select = colnames(met.func.expanded[[i]]))
+  met.func.only[[i]] <- distinct(x[,6])
+}
+
+#obtain a list of the orthogroups and then make sure there are no duplicates genes
+ogs.met = list()
+temp = list()
+
+for(i in 1:ncol(ogs)) {
+  x = as.matrix(met.func.only[[i]][1])
+  y = as.data.frame(cbind(ogs[,1],ogs[,i+1])) %>% separate_rows(V2,sep = ", ")
+  temp <- y[y$V2%in%c(x),]
+  ogs.met[[i]] <- temp
+}
+
+ogs.met.total = do.call(rbind,ogs.met)
+ogs.met.unique = as.matrix(unique(ogs.met.total[,1]))
+
+ogs.count.met = ogs.count[ogs.count$Orthogroup%in%c(ogs.met.unique),]
+
+ogs.temp = decostand(ogs.count.met[,2:97],method='pa')
+
+ogs.met.pa = cbind(ogs.count.met[,1],ogs.temp)
+
+write.csv(ogs.met.pa,"/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa.csv")
+
+#speific subset for the metabolism-related orthogroups for the pangenome analysis
+ogs.met.pa.interest = matrix(ncol = 46, nrow = nrow(ogs.met.pa))
+ogs.met.pa.interest = as.data.frame(ogs.met.pa.interest)
+
+for(i in 1:nrow(ids.interest)) {
+  for(j in 1:ncol(ogs.met.pa)) {
+    if(grepl(ids.interest$tip[i],colnames(ogs.met.pa)[j])) {
+      ogs.met.pa.interest[,i] <- ogs.met.pa[,j]
+      colnames(ogs.met.pa.interest)[i] <- colnames(ogs.met.pa)[j]
+    }
+  }
+}
+
+row.names(ogs.met.pa.interest) <- ogs.met.pa$`ogs.count.met[, 1]`
+write.csv(ogs.met.pa.interest,"/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa_pangenome.csv") #save the entire dataset
+
+ogs.met.pa.interest1 = read.csv("/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa_pangenome.csv")
+
+ogs.met.pa.interest1$total = rowSums(ogs.met.pa.interest1[,2:47])
+ogs.met.pa.interest2 = subset(ogs.met.pa.interest1,total>2,select=colnames(ogs.met.pa.interest1[,1:47])) #subset for orthogroups with three or more genomes represented
+write.csv(ogs.met.pa.interest2,"/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa_pangenome_3PLUS.csv")
+
+ogs.met.pa.interest3 = ogs.met.pa.interest2[ogs.met.pa.interest2$X%in%ogs.met.final.pangenome,]
+write.csv(ogs.met.pa.interest3,"/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa_pangenome_3PLUS_updatedforRASTfuncs.csv")
+```
+
+##obtain the fasta ids and match to RAST functions for each of the orthogroups
+grab the ogs that are metabolism related and 3 or more genomes/og. find the ogs from the fasta id table and make sure they are the pangenome relevant strains, then grab the rast functions for each og, may need to do some manual prunning
+```{r}
+#ogs.met.total has a full list of the metabolism seqs for all 96 taxa and their corresponding og; I need ogs.met.pa.interest to grab the ogs that are relevant to 3 or more pangenome strains and only grab those
+
+ogs.comp.pan = ogs.met.pa.interest2$X
+ogs.met.total.pan = ogs.met.total[ogs.met.total$V1%in%ogs.comp.pan,]
+```
+
+```{r}
+#must run the entire code chunk here
+setwd("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/RAST_subsystems")
+dat.list = list.files(pattern = "*.txt") #import files with the following pattern in the folder
+dat = lapply(dat.list, read.delim) #lapply will take the files and import them into r into a dataframe
+
+og.func.expanded = list()
+
+for (i in 1:length(met.func)) {
+  og.func.expanded[[i]] <- dat[[i]] %>% separate_rows(Features,sep = ", ")
+}
+
+og.func.expanded1 = do.call(rbind,og.func.expanded)
+
+#remove any functional categories not related to primary metabolism
+og.func.sorted = subset(og.func.expanded1,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(og.func.expanded1))
+
+og.func.sorted1 = subset(og.func.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(og.func.sorted))
+
+og.func.sorted1$Cat.id = rep('A')
+
+for(i in 1:nrow(og.func.sorted1)) {
+  ifelse(og.func.sorted1[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments',og.func.sorted1[i,7] <- 'V',
+  ifelse(og.func.sorted1[i,2] %in% 'Carbohydrates',og.func.sorted1[i,7] <- 'C',
+  ifelse(og.func.sorted1[i,2] %in% 'Nitrogen Metabolism',og.func.sorted1[i,7] <- 'Ni',
+  ifelse(og.func.sorted1[i,2] %in% 'Amino Acids and Derivatives',og.func.sorted1[i,7] <- 'A',
+  ifelse(og.func.sorted1[i,2] %in% 'Fatty Acids, Lipids, and Isoprenoids',og.func.sorted1[i,7] <- 'L',
+  og.func.sorted1[i,7] <- 'Nu')))))
+}
+```
+
+```{r}
+#fasta header ids - unique to collect all the relevant functions
+fastaids.met.pan.unique = unique(ogs.met.total.pan[,2])
+
+og.func.sorted2 = list()
+
+for(i in 1:nrow(fastaids.met.pan.unique)) {
+  og.func.sorted2[[i]] <- subset(og.func.sorted1,Features%in%fastaids.met.pan.unique[i,])
+  og.func.sorted2[[i]][,8] <- rep(ogs.met.total.pan[ogs.met.total.pan$V2%in%fastaids.met.pan.unique[i,],1])
+}
+
+og.func.sorted3 = og.func.sorted2[lapply(og.func.sorted2,nrow)>0]
+
+og.func.sorted4 = do.call(rbind,og.func.sorted3)
+colnames(og.func.sorted4)[8] <- 'OG'
+
+ogs.met.pan.unique = unique(og.func.sorted4[,8])
+
+ogs.pan.func = list()
+
+for(i in 1:nrow(ogs.met.pan.unique)) {
+  x = og.func.sorted4[og.func.sorted4$OG%in%ogs.met.pan.unique[i,],7:8]
+  ogs.pan.func[[i]] <- unique(x)
+}
+
+ogs.pan.func1 = do.call(rbind,ogs.pan.func)
+
+write.csv(ogs.pan.func1,"/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/OG_pangenome_RAST_func.csv")
+write.csv(og.func.sorted4,"/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/fullRAST_function_OG_pangenome.csv")
+
+ogs.met.final.pangenome = unique(ogs.pan.func1$OG)
+```
+
+#Data preparation --> subset the metabolism-related genes (based on RAST) in the subset of taxa used for the pangenome analysis.
+
+##Fasta files for metabolism gene extraction. Requires the CDS fasta files generated from RAST. The goal will be to link the gene headers from the dataset and link them to the RAST data to identify metabolism related genes
+```{r}
+library(treeio)
+#must run the entire code chunk here, slow
+
+#used to obtain the metabolism related genes for the subset of taxa used in the pangenome analysis
+setwd("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Pangenome_analysis")
+seq.list = list.files(pattern = "*.fna") #import files with the following pattern in the folder; also used *.fna for the CDS sequences
+seq.dat = list()
+for(i in 1:length(seq.list)) {
+  seq.dat[[i]] <- read.fasta(seq.list[i])
+}
+```
+
+
+##Subset of the RAST subsystem files used for the pangenome anlaysis, specifically the subset of taxa used in the pangenome analysis
+```{r}
+#must run the entire code chunk here
+setwd("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/RAST_subsystems/pangenome_analysis")
+func.list = list.files(pattern = "*.txt") #import files with the following pattern in the folder
+met.func = lapply(func.list, read.delim) #lapply will take the files and import them into r into a dataframe
+
+```
+
+##Metabolism gene extraction - match the gene header names in the RAST data and the gene header names in the fasta file; then generate a new fasta file containing the metabolism related genes.
+```{r}
+library(tidyr) #required to run separate_rows
+library(dplyr) #required to run distinct
+
+#obtain the files of the bacterial species of interest - did manually and confirmed they are in order for each directory
+ids.interest = read.csv('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Comparative_genomics_proj/genome_strain_rename_pangenome.csv')
+
+#using the subsystem curated set, find all of the gene functions in the original rast file data wrangling (check3) and make sure there are no duplications of gene ids
+met.func.expanded = list()
+
+for (i in 1:length(met.func)) {
+  met.func.expanded[[i]] <- met.func[[i]] %>% separate_rows(Features,sep = ", ")
+}
+
+met.func.only = list()
+
+for(i in 1:length(met.func.expanded)) {
+  x <- subset(met.func.expanded[[i]],Subsystem %in% check3$Subsystem,select = colnames(met.func.expanded[[i]]))
+  met.func.only[[i]] <- distinct(x[,6])
+}
+
+#select for the rownames from the fasta files
+met.seqs = list()
+
+temp <- list()
+
+for(i in 1:length(seq.dat)) {
+  temp <- list()
+  x = as.matrix(met.func.only[[i]][1])
+  temp <- seq.dat[[i]][x]
+  met.seqs[[i]] <- temp
+}
+
+#export the fasta files
+
+file.path = paste0("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/",sub(pattern = '.txt','',func.list),'.fasta',sep = "")
+
+for(i in 1:length(met.seqs)){
+  write.FASTA(met.seqs[[i]],file.path[i])
+}
+```
+
+#Fig. 1 A-D analyses for comparison among orders for genome characteristics 
+##phylogenetic effect on genome features
+```{r}
+library(treeio)
+library(ggtree)
+library(ape)
+library(phytools)
+library(car)
+library(adephylo)
+library(emmeans)
+library(ggplot2)
+library(geiger)
+library(doBy)
+library(betareg)
+library(lmtest)
+
+#Summ of the metabolic functions (RAST roles)
+sums.func = rowSums(subs.taxa[,9:46])
+met.sum = cbind(subs.taxa[,1:8],sums.func)
+row.names(met.sum) <- met.sum$tip
+met.sum <- met.sum[row.names(dis),] #dis variable below
+met.sum = cbind(met.sum,dis)
+
+treephylo = read.iqtree("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/16S_tree/200813030150_IQTREE_rename/16S_rRNA_gblocks_9refs2_rename.fasta.treefile") #16S phylogeny
+features = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Comparative_genomics_proj/genome_features.csv") #genome features table found in Dataset S1
+row.names(features) <- features$tip #strain name labels
+
+
+tree = as.phylo(treephylo)
+
+#remove reference 16s strains from the phylogeny
+tree2 <-drop.tip(tree, c("Hinfluenzae","Pmultocida","Vcholerae","Spyogenes","Bsubtilis","Efaecalis","Mmagneticum","Rrubrum","Gbethesdensis"))
+
+name.check(tree2,features,data.names=features$tip)
+is.binary.tree(tree2)
+tree3 = root(tree2,'LlBpl1') #reroot the tree to L. lactis
+dis = as.data.frame(distRoot(tree3,tip='all',method='patristic')) #calculate patristic distance from root
+colnames(dis) = 'distance'
+features <- features[row.names(met.sum),] #add to the genomic features dataset
+features <- cbind(features,met.sum[,9:10])
+
+speciesphylo = read.iqtree("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Species_tree/iqtree_results_updated/concatenated_species_aa.fasta.treefile") #phylogenomic reconstruction tree
+
+species = as.phylo(speciesphylo)
+
+species2 <-drop.tip(species, c("Hinfluenzae","Pmultocida","Vcholerae","Spyogenes","Bsubtilis","Efaecalis","Mmagneticum","Rrubrum","Gbethesdensis")) #remove the taxa used as references in the tree
+
+name.check(species2,features,data.names=features$tip)
+is.binary.tree(species2)
+species3 = root(species2,'LlBpl1') #reroot to L. lactis
+dis2 = as.data.frame(distRoot(species3,tip='all',method='patristic')) #calculate patristic distance from root
+colnames(dis2) = 'distance_species'
+features <- features[row.names(dis2),] #add to the genomic characteristics dataframe
+features = cbind(features,dis2)
+
+write.csv(features,'/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Comparative_genomics_proj/genome_features_analysis.csv')
+
+###################################
+
+#phylogenetic signal with phytools - test pagels lambda and whether there is any phylogenetic signal; tree2 = 16S and species2 = phylogenomic analysis
+cds = phylosig(tree2,setNames(object = log10(features$cds), features$tip), method='lambda', test=TRUE)
+len = phylosig(tree2,setNames(object=log10(features$length),features$tip),method='lambda',test=TRUE)
+gc = phylosig(tree2,setNames(object = features$GC,features$tip),method='lambda',test=TRUE)
+met = phylosig(tree2,setNames(object = features$sums.func,features$tip),method='lambda',test=TRUE)
+
+cds2 = phylosig(species2,setNames(object = log10(features$cds), features$tip), method='lambda', test=TRUE)
+len2 = phylosig(species2,setNames(object=log10(features$length),features$tip),method='lambda',test=TRUE)
+gc2 = phylosig(species2,setNames(object = features$GC,features$tip),method='lambda',test=TRUE)
+met2 = phylosig(species2,setNames(object = features$sums.func,features$tip),method='lambda',test=TRUE)
+##################################
+
+#cds with phylogenetic distance as a covariate
+ggplot(features,aes(distance,log10(cds),color=Order)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+cds.mdl.lm = lm(log10(cds) ~ Order+distance_species, data = features) #16s
+summary(cds.mdl.lm)
+
+#assess normality
+cds.res.lm = residuals(cds.mdl.lm)
+summary(cds.res.lm)
+qqPlot(cds.res.lm)
+hist(cds.res.lm)
+boxplot(cds.res.lm)
+
+#assess homoscedasticity
+plot(fitted(cds.mdl.lm),cds.res.lm);
+abline(h=0,lty=2);
+lines(smooth.spline(fitted(cds.mdl.lm),cds.res.lm));
+
+#ANOVA test table
+Anova(cds.mdl.lm)
+
+#Use emmeans to calculate the among order differences with tukey test
+#calculate the average for the species tree distances
+avg = mean(features$distance_species)
+cds.emm = emmeans(cds.mdl.lm, ~ Order,at = list(distance=avg))
+CLD(cds.emm,Letters=letters) #obtain letter ranks
+
+#standard error of the mean function
+SE <- function(x) {
+  stdev = sd(x)
+  var.length = length(x)
+  SE = stdev/sqrt(var.length)
+  return(SE)
+}
+
+#raw mean and SE for each order
+cds.output = summaryBy(cds ~ Order,data=features,FUN=c(mean,SE))
+cds.output$sig = c('A','C',"B")
+
+ggplot(cds.output, aes(Order, cds.mean)) +
+  geom_point(size=5) +
+  geom_errorbar(aes(ymin=cds.mean-cds.SE,ymax=cds.mean+cds.SE),width=0.2) +
+  ylab('Number of CDS \n (mean \U00B1 SE)') +
+  scale_y_continuous(limits = c(2500,4500),breaks=seq(2500,4500,by=500))+
+  geom_text(aes(label=sig),vjust=c(-2.8,-3,-2),size=7) +
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+
+
+#############################
+
+#len with phylogenetic distance as a covariate
+ggplot(features,aes(distance,log10(length),color=Order)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+len.mdl.lm = lm(log10(length) ~ Order+distance_species, data = features) #species
+summary(len.mdl.lm)
+
+#assess normality
+len.res.lm = residuals(len.mdl.lm)
+summary(len.res.lm)
+qqPlot(len.res.lm)
+hist(len.res.lm)
+boxplot(len.res.lm)
+
+
+#assess homoscedasticity
+plot(fitted(len.mdl.lm),len.res.lm);
+abline(h=0,lty=2);
+lines(smooth.spline(fitted(len.mdl.lm),len.res.lm));
+
+
+#ANOVA
+Anova(len.mdl.lm)
+
+#Use emmeans to calculate the among order differences with tukey test
+#calculate the average for the species tree distances
+avg = mean(features$distance_species)
+len.emm = emmeans(len.mdl.lm, ~ Order,at = list(distance=avg))
+CLD(len.emm,Letters=letters)
+
+x =features$length/10^6 #adjust by dividing by 10^6 to put in terms of Mbp
+len.output = summaryBy(x~Order, data=features,FUN=c(mean,SE))
+len.output$sig = c('A','C','B')
+
+ggplot(len.output, aes(Order, x.mean)) +
+  geom_point(size=5) +
+  geom_errorbar(aes(ymin=(x.mean-x.SE),ymax=x.mean+x.SE),width=0.2) +
+  ylab('Est. genome size [Mbp] \n (mean \U00B1 SE)') +
+  scale_y_continuous(limits = c(2.5,5),breaks=seq(2.5,5,by=0.5))+
+  geom_text(aes(label=sig),vjust=c(-2.8,-3,-2),size=7) +
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+
+###############################
+
+#GC with phylogenetic distance as a covariate
+ggplot(features,aes(distance_species,GC,color=Order)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+y = features$GC/100 #adjust data to proportion instead of percentage
+gc.mdl.lm = glm(y ~ Order+distance_species, family=quasibinomial(link='logit'),data = features) #species
+summary(gc.mdl.lm)
+
+#assess normality
+gc.res.lm = residuals(gc.mdl.lm)
+summary(gc.res.lm)
+qqPlot(gc.res.lm)
+hist(gc.res.lm)
+boxplot(gc.res.lm)
+
+#assess homoscedasticity
+plot(fitted(gc.mdl.lm),gc.res.lm);
+abline(h=0,lty=2);
+lines(smooth.spline(fitted(gc.mdl.lm),gc.res.lm));
+
+#ANOVA test table
+Anova(gc.mdl.lm,test.statistic = 'Wald')
+
+#Use emmeans to calculate the among order differences with tukey test
+#calculate the average for the species tree distances
+avg = mean(features$distance_species)
+gc.emm = emmeans(gc.mdl.lm, ~ Order,at = list(distance=avg))
+CLD(gc.emm,Letters=letters)
+
+
+ggplot(features, aes(Order, GC)) +
+  geom_boxplot(fill='gray') +
+  ylab('GC content (%)') +
+  #scale_y_continuous(limits = c(10,70),breaks=seq(10,70,by=10))+
+  #geom_text(aes(label=c('A','C','B')),vjust=-4.3,size=7) +
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+
+###############################
+
+#met with phylogenetic distance as a covariate
+ggplot(features,aes(distance,sums.func,color=Order)) +
+  geom_point() +
+  geom_smooth(method='lm')
+
+#tried weighting the data to the total number of functions, similar result, but increased the average of the lactos much higher than is realistic
+met.mdl.lm = lm(log10(sums.func) ~ Order+distance_species, data = features) #species
+summary(met.mdl.lm)
+
+#assess normality
+met.res.lm = residuals(met.mdl.lm)
+summary(met.res.lm)
+qqPlot(met.res.lm)
+hist(met.res.lm)
+boxplot(met.res.lm)
+
+#assess homoscedasticity
+plot(fitted(met.mdl.lm),met.res.lm);
+abline(h=0,lty=2);
+lines(smooth.spline(fitted(met.mdl.lm),met.res.lm));
+
+#ANOVA test table
+Anova(met.mdl.lm)
+
+#Use emmeans to calculate the among order differences with tukey test
+#calculate the average for the species tree distances
+avg = mean(features$distance_species)
+met.emm = emmeans(met.mdl.lm, ~ Order,at = list(distance=avg))
+CLD(met.emm,Letters=letters)
+
+#obtain the raw mean and SE by order
+met.output = summaryBy(sums.func ~ Order, data=features,FUN=c(mean,SE))
+met.output$sig = c('A','C','B')
+
+ggplot(met.output, aes(Order, sums.func.mean)) +
+  geom_point(size=5) +
+  geom_errorbar(aes(ymin=sums.func.mean-sums.func.SE,ymax=sums.func.mean+sums.func.SE),width=0.2) +
+  ylab('Metabolic function count \n (mean \U00B1 SE)') +
+  scale_y_continuous(limits = c(300,800),breaks=seq(300,800,by=100))+
+  geom_text(aes(label=sig),vjust=c(-2,-2,-1.5),size=7) +
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+```
+
+#Fig. 3 analyses linking function, taxonomy, and phylogeny
+
+## Fig. 3A heatmap of raw counts
+```{r}
+library(gplots)
+library(pheatmap)
+library(RColorBrewer)
+
+#arrange the raw counts by order and tip
+subs.taxa2 = arrange(subs.taxa,Order,tip)
+subs.n = subs.taxa2[,9:46]
+row.names(subs.n) <- subs.taxa2$tip
+subs.n = t(subs.n)
+
+#heatmap.pdf
+pheatmap(subs.n,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,legend=FALSE,fontsize=7,cellheight = 7,show_rownames=FALSE,show_colnames = FALSE)
+#heatmap2.pdf
+pheatmap(subs.n,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,legend=TRUE,show_rownames=TRUE,show_colnames = TRUE)
+#heatmap3.pdf
+pheatmap(subs.n,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,show_rownames=FALSE,show_colnames = FALSE)
+
+pdf("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/heatmap.pdf")
+heatmap.2(subs.n,scale='none',trace='none',dendrogram='none',Rowv=FALSE,Colv=FALSE,key=FALSE)
+dev.off()
+
+
+###############
+#to better identify the zeros, replace with NA and they become gray with pheatmap.
+
+subs.n2 = as.data.frame(matrix(nrow=38,ncol=96))
+row.names(subs.n2) = row.names(subs.n)
+colnames(subs.n2) = colnames(subs.n)
+
+for(i in 1:38) {
+  for(j in 1:96) {
+    ifelse(subs.n[i,j]>0,subs.n2[i,j]<-subs.n[i,j],subs.n2[i,j]<-NA)
+  }
+}
+
+pheatmap(subs.n2,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,legend=FALSE,fontsize=7,cellheight = 7,show_rownames=FALSE,show_colnames = FALSE)
+#heatmap2.pdf
+pheatmap(subs.n2,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,legend=TRUE,show_rownames=TRUE,show_colnames = TRUE)
+#heatmap3.pdf
+pheatmap(subs.n2,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,show_rownames=FALSE,show_colnames = FALSE)
+```
+
+##Fig. 3B PCoA -- Bray-Curtis dissimilarity matrix
+```{r}
+library(vegan)
+library(ggplot2)
+library(EcolUtils)
+
+#makes proportions by row
+subs.p = decostand(subs.taxa[,9:46],'total') 
+
+#variation by taxonomic grouping assessment by PERMANOVA
+adonis(subs.p ~ ids$Order,method='bray')
+adonis.pair(vegdist(subs.p,method='bray'),as.factor(ids$Order),nper=999,corr.method='fdr') #pairwise comparison
+
+#setup PCoA with Bray-Curtis dissimilarity matrix
+bray.pcoa = capscale(subs.p~1,distance='bray')
+head(summary(bray.pcoa))
+biplot(bray.pcoa)
+biplot(bray.pcoa,display="sites")
+
+bray.pcoa.axes <- data.frame(scores(bray.pcoa, display = "sites"))
+bray.pcoa.loading <- data.frame(scores(bray.pcoa,display = 'species'))
+
+##prelim graph by order
+ggplot(data = bray.pcoa.axes, aes(MDS1, MDS2)) + 
+  geom_point(aes(fill = ids$Order), colour="black", pch = 21,size = 5, stroke =1) +
+  theme_bw(base_size = 16) +
+  xlab("PC1 (44%)") +
+  ylab("PC2 (20%)") +
+  theme_bw(base_size = 25) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(), axis.title = element_text(size = 16))
+
+##prelim graph by genus for supplemental
+ggplot(data = bray.pcoa.axes, aes(MDS1, MDS2)) + 
+  geom_point(aes(fill = ids$Genus), colour="black", pch = 21,size = 5, stroke =1) +
+  theme_bw(base_size = 16) +
+  xlab("PC1 (44%)") +
+  ylab("PC2 (20%)") +
+  theme_bw(base_size = 25) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(), axis.title = element_text(size = 16))
+
+#Identify the top 10-20 categories that are driving PCoA space 
+top.loading.bray = matrix(rep(0,38),38,1)
+
+for(i in c(1:ncol(subs.p))) {
+  top.loading.bray[i,] = sqrt(((bray.pcoa.loading[i,1])^2)+((bray.pcoa.loading[i,2])^2))
+}
+
+top.loading.bray = data.frame(cats$Subcategory,top.loading.bray,bray.pcoa.loading)
+
+top20.bray = top.loading.bray[order(-top.loading.bray$top.loading.bray),]$cats.Subcategory
+
+arrows = as.data.frame(matrix(nrow = 20, ncol = 4))
+
+for(j in 1:20) {
+  for(i in 1:38) {
+    if(top20.bray[j] %in% row.names(top.loading.bray)[i]) {
+    col.data = top.loading.bray[i,1:4]
+    arrows[j,1:4] <- col.data
+    }
+  }
+}
+
+top20.names <- seq(1:20)
+
+row.names(arrows) <- top20.names
+
+
+#Plot the top 15 groupings
+bray.pcoa.plot = ggplot(data = bray.pcoa.axes, aes(MDS1, MDS2)) + 
+  geom_point(aes(fill = ids$Order), colour="black", pch = 21,size = 5, stroke =1) +
+  theme_bw(base_size = 16) +
+  xlab("PC1 (44%)") +
+  ylab("PC2 (20%)") +
+  theme_bw(base_size = 25) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(), axis.title = element_text(size = 16))
+
+print(bray.pcoa.plot)
+
+bray.1 = bray.pcoa.plot
+
+for (j in 1:15) { 
+    bray.1 <- bray.1 + geom_segment(aes_(x = 0, y = 0, xend = arrows[j,3], yend = arrows[j,4]), arrow = arrow(length = unit(0.025,"npc")), size = 0.05) 
+}
+
+print(bray.1)
+
+bray.2 = bray.1
+
+for (j in 1:15) { 
+    bray.2 <- bray.2 + geom_text(aes_(x = arrows[j,3], y = arrows[j,4],label = top20.names[j]),hjust=1.6,vjust=-0.5,size=7)
+}
+
+print(bray.2)
+```
+
+## Fig. 3C Hierarchical cluster - Ward's method with Bray-Curtis dissimiliarity matrix
+```{r}
+library(vegan)
+library(pvclust)
+library(ape)
+library(BiocManager)
+library(ggtree)
+library(treeio)
+
+#makes proportions by row
+subs.p = decostand(subs.taxa[,9:46],'total') 
+row.names(subs.p) <- ids$name
+
+#agglomerate cluster with Ward's method
+clust = hclust(vegdist(subs.p,method='bray'),method = "ward.D2")
+plot(clust)
+
+#ran 1000 bootstraps a couple times and some were good, but I think the 10000 is a better choice and gives consistent results
+booted.clust = pvclust(t(subs.p), 
+                  method.dist = function(x){
+                    vegdist(t(x),method='bray')
+                  },
+                  method.hclust = "ward.D2",nboot=10000)
+pdf("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/bray_ward_pvclust_10k2.pdf",width=50, height=20)
+plot(booted.clust)
+pvrect(booted.clust,alpha=0.95)
+dev.off()
+
+seplot(booted.clust,identify = TRUE)
+print(booted.clust,which=c(47,68,73))
+
+#function from: http://www.jafy.eu/posts/2019/06/pvclust-nodevalues-in-ggtree.md/ which is used to plot the bootstraps for the pvclust analysis
+as.phylo.pvclust.node.attributes <- function(x, attribute) {
+  N <- dim(x$merge)[1]
+  edge <- matrix(0L, 2*N, 2)
+  edge.length <- numeric(2*N)
+  ## `node' gives the number of the node for the i-th row of x$merge
+  node <- integer(N)
+  node[N] <- N + 2L
+  node.attributes <- rep(NA, N)
+  cur.nod <- N + 3L
+  j <- 1L
+  for (i in N:1) {
+    edge[j:(j + 1), 1] <- node[i]
+    for (l in 1:2) {
+      k <- j + l - 1L
+      y <- x$merge[i, l]
+      if (y > 0) {
+        edge[k, 2] <- node[y] <- cur.nod
+        cur.nod <- cur.nod + 1L
+        edge.length[k] <- x$height[i] - x$height[y]
+        node.attributes[edge[k, 1] - (N + 1)] <- attribute[i]
+      } else {
+        edge[k, 2] <- -y
+        edge.length[k] <- x$height[i]
+        node.attributes[edge[k, 1] -  (N + 1)] <- attribute[i]
+      }
+    }
+    j <- j + 2L
+  }
+
+  if (is.null(x$labels))
+    x$labels <- as.character(1:(N + 1))
+  
+  ## MODIFICATION: clean up node.attributes so they are in same format in 
+  ## pvclust plots
+  node.attributes <- as.character(round(node.attributes * 100, 0))
+  node.attributes[1] <- NA
+  
+  obj <- list(edge = edge, edge.length = edge.length / 2,
+              tip.label = x$labels, Nnode = N, node.label = node.attributes)
+  class(obj) <- "phylo"
+  stats::reorder(obj)
+}
+
+hclust_boot_phylo <- as.phylo.pvclust.node.attributes(booted.clust$hclust, 
+                                                     booted.clust$edges$bp)
+
+ids %>% arrange(hclust_boot_phylo$tip.label)
+
+d <-
+rename_taxa(hclust_boot_phylo,ids,name,tip)
+
+d2 <- rename_taxa(d,x,tip,tip_new) #updated strian IDs
+
+write.tree(hclust_boot_phylo,'/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/metabolic_cluster_bray_ward.nwk')
+
+ggtree(d2) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 50 & as.numeric(label) <= 70, label = label),fill = 'white',pch=23,size = 3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 70, label = label),fill = 'white',pch=21,size = 3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 80, label = label),fill = 'gray',pch=21,size = 3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 95, label = label),fill = 'black',pch=21,size = 3) +
+  geom_treescale() 
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/metabolic_HCA_bray_ward2.pdf",width = 4,height=7,unit='in',limitsize = TRUE)
+
+met.clust=ggtree(d2) +
+  geom_tiplab(aes(label=label),size=3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 50 & as.numeric(label) <= 70, label = label),fill = 'white',pch=23,size = 3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 70, label = label),fill = 'white',pch=21,size = 3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 80, label = label),fill = 'gray',pch=21,size = 3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 95, label = label),fill = 'black',pch=21,size = 3) +
+  geom_treescale() 
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/metabolic_HCA_bray_wardWLABS2.pdf",met.clust,width = 30,height=14,unit='in',limitsize = FALSE)
+
+met.clust=ggtree(hclust_boot_phylo) +
+  geom_tiplab(aes(label=label),size=3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 70, label = label),fill = 'white',pch=21,size = 3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 80, label = label),fill = 'gray',pch=21,size = 3) +
+  geom_tippoint(aes(subset = !is.na(as.numeric(label)) & as.numeric(label) > 95, label = label),fill = 'black',pch=21,size = 3) +
+  geom_treescale() 
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/metabolic_HCA_bray_wardWLABSorig.pdf",met.clust,width = 30,height=14,unit='in',limitsize = FALSE)
+    
+```
+
+#Fig. 4 pangenome analysis
+
+##Fig. 4B Pangenome index comparison
+```{r}
+library(betareg)
+library(lmtest)
+pan.dat = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/Pangenome_index.csv")
+pan.dist = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/Pangenome_distribution.csv")
+
+#Beta regression analysis
+pan.mdl = betareg(index ~ species,data = pan.dat)
+summary(pan.mdl)
+
+#assess normality
+pan.res.lm = residuals(pan.mdl)
+summary(pan.res.lm)
+qqPlot(pan.res.lm)
+hist(pan.res.lm)
+boxplot(pan.res.lm)
+
+
+#assess homoscedasticity
+plot(fitted(pan.mdl),pan.res.lm);
+abline(h=0,lty=2);
+lines(smooth.spline(fitted(pan.mdl),pan.res.lm));
+
+#likelihood ratio test
+lrtest(pan.mdl)
+
+#Letter ranking from emmeans with post hoc tukey test
+pan.emm = emmeans(pan.mdl, ~ species)
+CLD(pan.emm,Letters=letters)
+
+
+pan.output = as.data.frame(pan.emm)
+pan.output$sig = c('A','E',"C","B","D","B","A")
+
+ggplot(pan.output, aes(species, emmean)) +
+  geom_point(size=5) +
+  geom_errorbar(aes(ymin=emmean-SE,ymax=emmean+SE),width=0.2) +
+  ylab('Pangenome distribution index \n (mean \U00B1 SE)') +
+  scale_y_continuous(limits = c(0.4,1),breaks=seq(0.4,1,by=0.2))+
+  geom_text(aes(label=sig),vjust=-2,size=7) +
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+```
+
+##Fig. 4C and Fig S6 - sequence diversity among taxa used in the pangenome analysis
+###amino acid alignment from the species tree used to calculate Shannon index for strain diversity among each species used in the pangenome analysis
+```{r}
+library(bio3d)
+library(ape)
+library(ggplot2)
+
+spal = bio3d::read.fasta("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Species_tree/species_amino_acid_distances_R2.fasta")
+
+#subset each taxa group
+lab = as.matrix(subset(ids.interest,Species_new == 'brevis',select='tip'))
+#View(spal$ali[c(lab),])
+lapl = as.matrix(subset(ids.interest,Species_new == 'plantarum',select='tip'))
+ceri = as.matrix(subset(ids.interest,Species_new == 'cerinus',select='tip'))
+prr = as.matrix(subset(ids.interest,Species_new == 'rettgerii',select='tip'))
+tat = as.matrix(subset(ids.interest,Species_new == 'sp.',select='tip'))
+ath = as.matrix(subset(ids.interest,Species_new == 'thailandicus',select='tip'))
+gk = as.matrix(subset(ids.interest,Species_new == 'kondonii',select='tip'))
+
+#Calculate Shannon entropy
+lab.e <-entropy(spal$ali[c(lab),])
+mean(lab.e$H)
+lapl.e <-entropy(spal$ali[c(lapl),])
+mean(lapl.e$H)
+ceri.e <-entropy(spal$ali[c(ceri),])
+mean(ceri.e$H)
+prr.e <-entropy(spal$ali[c(prr),])
+mean(prr.e$H)
+tat.e <-entropy(spal$ali[c(tat),])
+mean(tat.e$H)
+ath.e <-entropy(spal$ali[c(ath),])
+mean(ath.e$H)
+gk.e <-entropy(spal$ali[c(gk),])
+mean(gk.e$H)
+
+a = as.data.frame(lab.e$H)
+a$taxa = rep('LAb')
+colnames(a)[1] <- 'H'
+
+b = as.data.frame(lapl.e$H)
+b$taxa = rep('LApl')
+colnames(b)[1] <- 'H'
+
+c = as.data.frame(ceri.e$H)
+c$taxa = rep('Gc')
+colnames(c)[1] <- 'H'
+
+d = as.data.frame(prr.e$H)
+d$taxa = rep('PRr')
+colnames(d)[1] <- 'H'
+
+e = as.data.frame(tat.e$H)
+e$taxa = rep('T')
+colnames(e)[1] <- 'H'
+
+f = as.data.frame(ath.e$H)
+f$taxa = rep('Ath')
+colnames(f)[1] <- 'H'
+
+g = as.data.frame(gk.e$H)
+g$taxa = rep('Gk')
+colnames(g)[1] <- 'H'
+
+aa.div = rbind(a,b,c,d,e,f,g)
+
+###############################
+#linear model for amino acid diversity among taxa used in pangenome analysis
+hist(aa.div[aa.div$H>0,1])
+aa.div.mdl.lm = lm(H ~ taxa, data = aa.div) 
+summary(aa.div.mdl.lm)
+
+#assess normality
+aa.div.res.lm = residuals(aa.div.mdl.lm)
+summary(aa.div.res.lm)
+qqPlot(aa.div.res.lm)
+hist(aa.div.res.lm)
+boxplot(aa.div.res.lm)
+
+#assess homoscedasticity
+plot(fitted(aa.div.mdl.lm),aa.div.res.lm);
+abline(h=0,lty=2);
+lines(smooth.spline(fitted(aa.div.mdl.lm),aa.div.res.lm));
+
+#ANOVA table
+Anova(aa.div.mdl.lm)
+
+#emmeans for among taxa differences
+aa.div.emm = emmeans(aa.div.mdl.lm, ~ taxa)
+CLD(aa.div.emm,Letters=letters)
+
+
+aa.div.output = as.data.frame(aa.div.emm)
+aa.div.output$sig = c("C","A","B","CD","AB","CD","D")
+
+ggplot(aa.div.output, aes(taxa, emmean)) +
+  geom_point(size=5)+
+  geom_errorbar(aes(ymin=emmean-SE,ymax=emmean+SE),width=0.1)+
+  ylab('H \n (mean \U00B1 SE, n = 13,238)') +
+  scale_y_continuous(limits = c(0,0.01),breaks=seq(0,0.01,by=0.005))+
+  geom_text(aes(label=sig),vjust=-2,size=7) +
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+```
+
+###nucleotide diversity (pi) in 16S strain diversity for each species used in the pangenome analysis
+```{r}
+library(ape)
+library(pegas)
+library(ggplot2)
+
+align = read.dna("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/16S_tree/16S_genetic_distances_R.fasta",format='fasta')
+
+align2 = ape::as.alignment(as.character(align))
+
+align3 = as.DNAbin(align2)
+
+nuc.div(align3)
+
+lab = as.matrix(subset(ids.interest,Species_new == 'brevis',select='tip'))
+#View(spal$ali[c(lab),])
+lapl = as.matrix(subset(ids.interest,Species_new == 'plantarum',select='tip'))
+ceri = as.matrix(subset(ids.interest,Species_new == 'cerinus',select='tip'))
+prr = as.matrix(subset(ids.interest,Species_new == 'rettgerii',select='tip'))
+tat = as.matrix(subset(ids.interest,Species_new == 'sp.',select='tip'))
+ath = as.matrix(subset(ids.interest,Species_new == 'thailandicus',select='tip'))
+gk = as.matrix(subset(ids.interest,Species_new == 'kondonii',select='tip'))
+
+lab.pi <-nuc.div(align3[c(lab),])
+lapl.pi <-nuc.div(align3[c(lapl),])
+ceri.pi <-nuc.div(align3[c(ceri),])
+prr.pi <-nuc.div(align3[c(prr),])
+tat.pi <-nuc.div(align3[c(tat),])
+ath.pi <-nuc.div(align3[c(ath),])
+gk.pi <-nuc.div(align3[c(gk),])
+
+a = as.data.frame(lab.pi$H)
+a$taxa = rep('LAb')
+colnames(a)[1] <- 'H'
+
+b = as.data.frame(lapl.pi$H)
+b$taxa = rep('LApl')
+colnames(b)[1] <- 'H'
+
+c = as.data.frame(ceri.pi$H)
+c$taxa = rep('Gc')
+colnames(c)[1] <- 'H'
+
+d = as.data.frame(prr.pi$H)
+d$taxa = rep('PRr')
+colnames(d)[1] <- 'H'
+
+e = as.data.frame(tat.pi$H)
+e$taxa = rep('T')
+colnames(e)[1] <- 'H'
+
+f = as.data.frame(ath.pi$H)
+f$taxa = rep('Ath')
+colnames(f)[1] <- 'H'
+
+g = as.data.frame(gk.pi$H)
+g$taxa = rep('Gk')
+colnames(g)[1] <- 'H'
+
+pi.div = rbind(a,b,c,d,e,f,g)
+```
+
+##Fig. 4D PCoA of orthogroup differences
+```{r}
+library(vegan)
+library(ggplot2)
+library(EcolUtils)
+library(car)
+library(emmeans)
+
+og.comp.met = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa_pangenome_3PLUS_comparison_withCOGs_RAST.csv")
+og.comp.met= na.omit(og.comp.met)
+rownames(og.comp.met) = og.comp.met$OGs
+og.diff = og.sig1[,1]
+og.comp.met = og.comp.met[og.comp.met$OGs %in% og.diff,]
+
+funcs = cbind(og.comp.met$OGs,og.comp.met$Cat.id)
+
+association = as.data.frame(t(og.comp.met[,2:47]))
+species.ids = as.matrix(c(rep('LAb',5),rep('Gc',13),rep('Gk',6),rep('LApl',6),rep('PRr',5),rep('T',6),rep('Ath',5)))
+association$taxa = species.ids
+
+#variation by taxonomic grouping by PERMANOVA
+adonis(association[,1:597] ~ association$taxa,method='jaccard')
+adonis.pair(vegdist(association[,1:597],method='jaccard'),as.factor(association$taxa),nper=999,corr.method='fdr')
+
+#setup PCoA by jaccard dissimiarity
+jaccard.pcoa = capscale(association[,1:597]~1,distance='jaccard')
+head(summary(jaccard.pcoa))
+biplot(jaccard.pcoa)
+biplot(jaccard.pcoa,display="sites")
+
+jaccard.pcoa.axes <- data.frame(scores(jaccard.pcoa, display = "sites"))
+jaccard.pcoa.loading <- data.frame(scores(jaccard.pcoa,display = 'species'))
+
+## graph by order
+ggplot(data = jaccard.pcoa.axes, aes(MDS1, MDS2)) + 
+  geom_point(aes(fill = association$taxa), colour="black", pch = 21,size = 5, stroke =1) +
+  theme_bw(base_size = 16) +
+  xlab("PC1 (48%)") +
+  ylab("PC2 (24%)") +
+  scale_y_continuous(limits=c(-1.2,0.8),breaks = c(-1.2,-0.8,-0.4,0,0.4,0.8))+
+  scale_x_continuous(limits = c(-1.3,0.7),breaks=c(seq(-1.3,0.7,by=0.5)))+
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank())
+
+
+########################
+#PC association in Fig. S7
+
+mdl.mds1 = lm(MDS1 ~ og.comp.met.Cat.id,data=top.loading.jaccard)
+summary(mdl.mds1)
+
+#assess normality
+mds1.res.lm = residuals(mdl.mds1)
+summary(mds1.res.lm)
+qqPlot(mds1.res.lm)
+hist(mds1.res.lm)
+boxplot(mds1.res.lm)
+
+#assess homoscedasticity
+plot(fitted(mdl.mds1),mds1.res.lm);
+abline(h=0,lty=2);
+lines(smooth.spline(fitted(mdl.mds1),mds1.res.lm));
+
+#ANOVA
+Anova(mdl.mds1)
+
+mds1.emm = emmeans(mdl.mds1, ~ og.comp.met.Cat.id)
+CLD(mds1.emm,Letters=letters)
+
+
+mds1.output = as.data.frame(mds1.emm)
+
+ggplot(mds1.output, aes(og.comp.met.Cat.id, emmean)) +
+  geom_point(size=5)+
+  geom_errorbar(aes(ymin=lower.CL,ymax=upper.CL),width=0.1)+
+  geom_hline(yintercept = 0,linetype='dashed')+
+  ylab('PC1 \n (mean \U00B1 CI)') +
+  scale_y_continuous(limits = c(-0.06,0.09),breaks=seq(-0.06,0.090,by=0.03))+
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+
+########################
+mdl.mds2 = lm(MDS2 ~ og.comp.met.Cat.id,data=top.loading.jaccard)
+summary(mdl.mds2)
+
+#assess normality
+mds2.res.lm = residuals(mdl.mds2)
+summary(mds2.res.lm)
+qqPlot(mds2.res.lm)
+hist(mds2.res.lm)
+boxplot(mds2.res.lm)
+shapiro.test(mds2.res.lm)
+#looks normal
+
+#assess homoscedasticity
+plot(fitted(mdl.mds2),mds2.res.lm);
+abline(h=0,lty=2);
+lines(smooth.spline(fitted(mdl.mds2),mds2.res.lm));
+leveneTest(mds2.res.lm ~ og.comp.met.Cat.id, data = top.loading.jaccard)
+#look okay
+
+#no difference between methods
+#Anova(mdl.mds2,type="III")
+Anova(mdl.mds2)
+
+#emmip(mdl.mds2,Order~distance,cov.reduce=range)
+mds2.emm = emmeans(mdl.mds2, ~ og.comp.met.Cat.id)
+CLD(mds2.emm,Letters=letters)
+
+
+mds2.output = as.data.frame(mds2.emm)
+
+ggplot(mds2.output, aes(og.comp.met.Cat.id, emmean)) +
+  geom_point(size=5)+
+  geom_errorbar(aes(ymin=lower.CL,ymax=upper.CL),width=0.1)+
+  geom_hline(yintercept = 0,linetype='dashed')+
+  ylab('PC2 \n (mean \U00B1 CI)') +
+  scale_y_continuous(limits = c(-0.2,0.05),breaks=seq(-0.2,0.05,by=0.05))+
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+```
+
+##Fig. 4E and Table S6 enrichment in accessory genome and heatmap
+##Accessory genome enrichment - RAST, conducted in each code chunk for each taxon seperately
+```{r}
+library(tidyr)
+Ath.enrich = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/Roary_analysis/Ath/Ath_roary/Ath_gene_presence_absence_withCOGs.csv")
+
+met.func.expanded1 = do.call(rbind,met.func.expanded)
+
+#use the met.func.expanded function to get the functions
+Ath.funcs = list()
+for(i in 1:nrow(Ath.enrich)) {
+  Ath.funcs[[i]] <- subset(met.func.expanded1,Features%in%Ath.enrich[i,44])
+  Ath.funcs[[i]]$Distribution <- rep(Ath.enrich[i,21])
+}
+
+Ath.funcs1 = do.call(rbind,Ath.funcs)
+
+#remove any functional categories not related to primary metabolism
+Ath.funcs.sorted = subset(Ath.funcs1,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(Ath.funcs1))
+
+Ath.funcs.sorted1 = subset(Ath.funcs.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(Ath.funcs.sorted))
+
+Ath.funcs.sorted1$Cat.id = rep('A')
+
+for(i in 1:nrow(Ath.funcs.sorted1)) {
+  ifelse(Ath.funcs.sorted1[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments',Ath.funcs.sorted1[i,8] <- 'V',
+  ifelse(Ath.funcs.sorted1[i,2] %in% 'Carbohydrates',Ath.funcs.sorted1[i,8] <- 'C',
+  ifelse(Ath.funcs.sorted1[i,2] %in% 'Nitrogen Metabolism',Ath.funcs.sorted1[i,8] <- 'Ni',
+  ifelse(Ath.funcs.sorted1[i,2] %in% 'Amino Acids and Derivatives',Ath.funcs.sorted1[i,8] <- 'A',
+  ifelse(Ath.funcs.sorted1[i,2] %in% 'Fatty Acids, Lipids, and Isoprenoids',Ath.funcs.sorted1[i,8] <- 'L',
+  Ath.funcs.sorted1[i,8] <- 'Nu')))))
+}
+
+Ath.cats = unique(Ath.funcs.sorted1$Subsystem)
+Ath.dat = matrix(nrow=length(Ath.cats)+1,ncol = 3)
+
+for(i in 1:(nrow(Ath.dat)-1)) {
+  Ath.dat[i,1] = Ath.cats[i]
+  Ath.dat[i,2] <- nrow(subset(Ath.funcs.sorted1,Subsystem %in% Ath.cats[i]))
+  Ath.dat[i,3] <- nrow(subset(Ath.funcs.sorted1,Subsystem %in% Ath.cats[i] & Distribution=='Accessory'))
+}
+Ath.dat[76,1] = 'Total'
+Ath.dat[76,2] <- nrow(Ath.funcs.sorted1)
+Ath.dat[76,3] <- nrow(subset(Ath.funcs.sorted1,Distribution=='Accessory'))
+
+Ath.pvals = matrix(nrow=length(Ath.cats),ncol = 4)
+
+for(i in 1:(nrow(Ath.dat)-1)) {
+  x = rbind(Ath.dat[76,2:3],Ath.dat[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  Ath.pvals[i,1] <- Ath.dat[i,1]
+  print(fisher.test(z,alternative='g'))
+  Ath.pvals[i,3] <- fisher.test(z,alternative='g')$p.value
+  Ath.pvals[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+Ath.pvals[,4] = p.adjust(Ath.pvals[,3],method='fdr')
+```
+
+```{r}
+Gc.enrich = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/Roary_analysis/Gc/Gc_roary/Gc_gene_presence_absence_withCOGs.csv")
+
+met.func.expanded1 = do.call(rbind,met.func.expanded)
+
+#use the met.func.expanded function to get the functions
+Gc.funcs = list()
+for(i in 1:nrow(Gc.enrich)) {
+  Gc.funcs[[i]] <- subset(met.func.expanded1,Features%in%Gc.enrich[i,52])
+  Gc.funcs[[i]]$Distribution <- rep(Gc.enrich[i,29])
+}
+
+Gc.funcs1 = do.call(rbind,Gc.funcs)
+
+#remove any functional categories not related to primary metabolism
+Gc.funcs.sorted = subset(Gc.funcs1,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(Gc.funcs1))
+
+Gc.funcs.sorted1 = subset(Gc.funcs.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(Gc.funcs.sorted))
+
+Gc.funcs.sorted1$Cat.id = rep('A')
+
+for(i in 1:nrow(Gc.funcs.sorted1)) {
+  ifelse(Gc.funcs.sorted1[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments',Gc.funcs.sorted1[i,8] <- 'V',
+  ifelse(Gc.funcs.sorted1[i,2] %in% 'Carbohydrates',Gc.funcs.sorted1[i,8] <- 'C',
+  ifelse(Gc.funcs.sorted1[i,2] %in% 'Nitrogen Metabolism',Gc.funcs.sorted1[i,8] <- 'Ni',
+  ifelse(Gc.funcs.sorted1[i,2] %in% 'Amino Acids and Derivatives',Gc.funcs.sorted1[i,8] <- 'A',
+  ifelse(Gc.funcs.sorted1[i,2] %in% 'Fatty Acids, Lipids, and Isoprenoids',Gc.funcs.sorted1[i,8] <- 'L',
+  Gc.funcs.sorted1[i,8] <- 'Nu')))))
+}
+
+
+Gc.cats = unique(Gc.funcs.sorted1$Subsystem)
+Gc.dat = matrix(nrow=length(Gc.cats)+1,ncol = 3)
+
+for(i in 1:(nrow(Gc.dat)-1)) {
+  Gc.dat[i,1] = Gc.cats[i]
+  Gc.dat[i,2] <- nrow(subset(Gc.funcs.sorted1,Subsystem %in% Gc.cats[i]))
+  Gc.dat[i,3] <- nrow(subset(Gc.funcs.sorted1,Subsystem %in% Gc.cats[i] & Distribution=='Accessory'))
+}
+Gc.dat[81,1] = 'Total'
+Gc.dat[81,2] <- nrow(Gc.funcs.sorted1)
+Gc.dat[81,3] <- nrow(subset(Gc.funcs.sorted1,Distribution=='Accessory'))
+
+Gc.pvals = matrix(nrow=length(Gc.cats),ncol = 4)
+
+for(i in 1:(nrow(Gc.dat)-1)) {
+  x = rbind(Gc.dat[81,2:3],Gc.dat[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  Gc.pvals[i,1] <- Gc.dat[i,1]
+  print(fisher.test(z,alternative='g'))
+  Gc.pvals[i,3] <- fisher.test(z,alternative='g')$p.value
+  Gc.pvals[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+Gc.pvals[,4] = p.adjust(Gc.pvals[,3],method='fdr')
+
+
+```
+
+```{r}
+Gk.enrich = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/Roary_analysis/Gk/Gk_roary/Gk_gene_presence_absence_withCOGs.csv")
+
+met.func.expanded1 = do.call(rbind,met.func.expanded)
+
+#use the met.func.expanded function to get the functions
+Gk.funcs = list()
+for(i in 1:nrow(Gk.enrich)) {
+  Gk.funcs[[i]] <- subset(met.func.expanded1,Features%in%Gk.enrich[i,45])
+  Gk.funcs[[i]]$Distribution <- rep(Gk.enrich[i,22])
+}
+
+Gk.funcs1 = do.call(rbind,Gk.funcs)
+
+#remove any functional categories not related to primary metabolism
+Gk.funcs.sorted = subset(Gk.funcs1,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(Gk.funcs1))
+
+Gk.funcs.sorted1 = subset(Gk.funcs.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(Gk.funcs.sorted))
+
+Gk.funcs.sorted1$Cat.id = rep('A')
+
+for(i in 1:nrow(Gk.funcs.sorted1)) {
+  ifelse(Gk.funcs.sorted1[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments',Gk.funcs.sorted1[i,8] <- 'V',
+  ifelse(Gk.funcs.sorted1[i,2] %in% 'Carbohydrates',Gk.funcs.sorted1[i,8] <- 'C',
+  ifelse(Gk.funcs.sorted1[i,2] %in% 'Nitrogen Metabolism',Gk.funcs.sorted1[i,8] <- 'Ni',
+  ifelse(Gk.funcs.sorted1[i,2] %in% 'Amino Acids and Derivatives',Gk.funcs.sorted1[i,8] <- 'A',
+  ifelse(Gk.funcs.sorted1[i,2] %in% 'Fatty Acids, Lipids, and Isoprenoids',Gk.funcs.sorted1[i,8] <- 'L',
+  Gk.funcs.sorted1[i,8] <- 'Nu')))))
+}
+
+Gk.cats = unique(Gk.funcs.sorted1$Subsystem)
+Gk.dat = matrix(nrow=length(Gk.cats)+1,ncol = 3)
+
+for(i in 1:(nrow(Gk.dat)-1)) {
+  Gk.dat[i,1] = Gk.cats[i]
+  Gk.dat[i,2] <- nrow(subset(Gk.funcs.sorted1,Subsystem %in% Gk.cats[i]))
+  Gk.dat[i,3] <- nrow(subset(Gk.funcs.sorted1,Subsystem %in% Gk.cats[i] & Distribution=='Accessory'))
+}
+Gk.dat[77,1] = 'Total'
+Gk.dat[77,2] <- nrow(Gk.funcs.sorted1)
+Gk.dat[77,3] <- nrow(subset(Gk.funcs.sorted1,Distribution=='Accessory'))
+
+Gk.pvals = matrix(nrow=length(Gk.cats),ncol = 4)
+
+for(i in 1:(nrow(Gk.dat)-1)) {
+  x = rbind(Gk.dat[77,2:3],Gk.dat[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  Gk.pvals[i,1] <- Gk.dat[i,1]
+  print(fisher.test(z,alternative='g'))
+  Gk.pvals[i,3] <- fisher.test(z,alternative='g')$p.value
+  Gk.pvals[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+Gk.pvals[,4] = p.adjust(Gk.pvals[,3],method='fdr')
+
+########carbohydrate analysis to look for enriched subsystems
+Gk.c = as.data.frame(subset(Gk.funcs.sorted1,Cat.id == "C"))
+Gk.sub = unique(Gk.c$Subsystem)
+Gk.dat2 = matrix(nrow=length(Gk.sub)+1,ncol = 3)
+
+for(i in 1:(nrow(Gk.dat2)-1)) {
+  Gk.dat2[i,1] = Gk.sub[i]
+  Gk.dat2[i,2] <- nrow(subset(Gk.c,Subsystem %in% Gk.sub[i]))
+  Gk.dat2[i,3] <- nrow(subset(Gk.c,Subsystem %in% Gk.sub[i] & Distribution=='Accessory'))
+}
+Gk.dat2[24,1] = 'Total'
+Gk.dat2[24,2] <- nrow(Gk.c)
+Gk.dat2[24,3] <- nrow(subset(Gk.c,Distribution=='Accessory'))
+
+Gk.pvals2 = matrix(nrow=length(Gk.sub),ncol = 4)
+
+for(i in 1:(nrow(Gk.dat2)-1)) {
+  x = rbind(Gk.dat2[24,2:3],Gk.dat2[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  Gk.pvals2[i,1] <- Gk.dat2[i,1]
+  print(fisher.test(z,alternative='g'))
+  Gk.pvals2[i,3] <- fisher.test(z,alternative='g')$p.value
+  Gk.pvals2[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+Gk.pvals2[,4] = p.adjust(Gk.pvals2[,3],method='fdr')
+
+```
+
+```{r}
+LAb.enrich = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/Roary_analysis/LAb/LAb_roary/LAb_gene_presence_absence_withCOGs.csv")
+
+met.func.expanded1 = do.call(rbind,met.func.expanded)
+
+#use the met.func.expanded function to get the functions
+LAb.funcs = list()
+for(i in 1:nrow(LAb.enrich)) {
+  LAb.funcs[[i]] <- subset(met.func.expanded1,Features%in%LAb.enrich[i,44])
+  LAb.funcs[[i]]$Distribution <- rep(LAb.enrich[i,21])
+}
+
+LAb.funcs1 = do.call(rbind,LAb.funcs)
+
+#remove any functional categories not related to primary metabolism
+LAb.funcs.sorted = subset(LAb.funcs1,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(LAb.funcs1))
+
+LAb.funcs.sorted1 = subset(LAb.funcs.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(LAb.funcs.sorted))
+
+LAb.funcs.sorted1$Cat.id = rep('A')
+
+for(i in 1:nrow(LAb.funcs.sorted1)) {
+  ifelse(LAb.funcs.sorted1[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments',LAb.funcs.sorted1[i,8] <- 'V',
+  ifelse(LAb.funcs.sorted1[i,2] %in% 'Carbohydrates',LAb.funcs.sorted1[i,8] <- 'C',
+  ifelse(LAb.funcs.sorted1[i,2] %in% 'Nitrogen Metabolism',LAb.funcs.sorted1[i,8] <- 'Ni',
+  ifelse(LAb.funcs.sorted1[i,2] %in% 'Amino Acids and Derivatives',LAb.funcs.sorted1[i,8] <- 'A',
+  ifelse(LAb.funcs.sorted1[i,2] %in% 'Fatty Acids, Lipids, and Isoprenoids',LAb.funcs.sorted1[i,8] <- 'L',
+  LAb.funcs.sorted1[i,8] <- 'Nu')))))
+}
+
+LAb.cats = unique(LAb.funcs.sorted1$Subsystem)
+LAb.dat = matrix(nrow=length(LAb.cats)+1,ncol = 3)
+
+for(i in 1:(nrow(LAb.dat)-1)) {
+  LAb.dat[i,1] = LAb.cats[i]
+  LAb.dat[i,2] <- nrow(subset(LAb.funcs.sorted1,Subsystem %in% LAb.cats[i]))
+  LAb.dat[i,3] <- nrow(subset(LAb.funcs.sorted1,Subsystem %in% LAb.cats[i] & Distribution=='Accessory'))
+}
+LAb.dat[68,1] = 'Total'
+LAb.dat[68,2] <- nrow(LAb.funcs.sorted1)
+LAb.dat[68,3] <- nrow(subset(LAb.funcs.sorted1,Distribution=='Accessory'))
+
+LAb.pvals = matrix(nrow=length(LAb.cats),ncol = 4)
+
+for(i in 1:(nrow(LAb.dat)-1)) {
+  x = rbind(LAb.dat[68,2:3],LAb.dat[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  LAb.pvals[i,1] <- LAb.dat[i,1]
+  print(fisher.test(z,alternative='g'))
+  LAb.pvals[i,3] <- fisher.test(z,alternative='g')$p.value
+  LAb.pvals[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+LAb.pvals[,4] = p.adjust(LAb.pvals[,3],method='fdr')
+
+########carbohydrate analysis to look for enriched subsystems
+LAb.c = as.data.frame(subset(LAb.funcs.sorted1,Cat.id == "C"))
+LAb.sub = unique(LAb.c$Subsystem)
+LAb.dat2 = matrix(nrow=length(LAb.sub)+1,ncol = 3)
+
+for(i in 1:(nrow(LAb.dat2)-1)) {
+  LAb.dat2[i,1] = LAb.sub[i]
+  LAb.dat2[i,2] <- nrow(subset(LAb.c,Subsystem %in% LAb.sub[i]))
+  LAb.dat2[i,3] <- nrow(subset(LAb.c,Subsystem %in% LAb.sub[i] & Distribution=='Accessory'))
+}
+LAb.dat2[29,1] = 'Total'
+LAb.dat2[29,2] <- nrow(LAb.c)
+LAb.dat2[29,3] <- nrow(subset(LAb.c,Distribution=='Accessory'))
+
+LAb.pvals2 = matrix(nrow=length(LAb.sub),ncol = 4)
+
+for(i in 1:(nrow(LAb.dat2)-1)) {
+  x = rbind(LAb.dat2[29,2:3],LAb.dat2[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  LAb.pvals2[i,1] <- LAb.dat2[i,1]
+  print(fisher.test(z,alternative='g'))
+  LAb.pvals2[i,3] <- fisher.test(z,alternative='g')$p.value
+  LAb.pvals2[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+LAb.pvals2[,4] = p.adjust(LAb.pvals2[,3],method='fdr')
+
+```
+
+```{r}
+LApl.enrich = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/Roary_analysis/LApl/LApl_roary/LApl_gene_presence_absence_withCOGs.csv")
+
+met.func.expanded1 = do.call(rbind,met.func.expanded)
+
+#use the met.func.expanded function to get the functions
+LApl.funcs = list()
+for(i in 1:nrow(LApl.enrich)) {
+  LApl.funcs[[i]] <- subset(met.func.expanded1,Features%in%LApl.enrich[i,45])
+  LApl.funcs[[i]]$Distribution <- rep(LApl.enrich[i,22])
+}
+
+LApl.funcs1 = do.call(rbind,LApl.funcs)
+
+#remove any functional categories not related to primary metabolism
+LApl.funcs.sorted = subset(LApl.funcs1,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(LApl.funcs1))
+
+LApl.funcs.sorted1 = subset(LApl.funcs.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(LApl.funcs.sorted))
+
+LApl.funcs.sorted1$Cat.id = rep('A')
+
+for(i in 1:nrow(LApl.funcs.sorted1)) {
+  ifelse(LApl.funcs.sorted1[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments',LApl.funcs.sorted1[i,8] <- 'V',
+  ifelse(LApl.funcs.sorted1[i,2] %in% 'Carbohydrates',LApl.funcs.sorted1[i,8] <- 'C',
+  ifelse(LApl.funcs.sorted1[i,2] %in% 'Nitrogen Metabolism',LApl.funcs.sorted1[i,8] <- 'Ni',
+  ifelse(LApl.funcs.sorted1[i,2] %in% 'Amino Acids and Derivatives',LApl.funcs.sorted1[i,8] <- 'A',
+  ifelse(LApl.funcs.sorted1[i,2] %in% 'Fatty Acids, Lipids, and Isoprenoids',LApl.funcs.sorted1[i,8] <- 'L',
+  LApl.funcs.sorted1[i,8] <- 'Nu')))))
+}
+
+LApl.cats = unique(LApl.funcs.sorted1$Subsystem)
+LApl.dat = matrix(nrow=length(LApl.cats)+1,ncol = 3)
+
+for(i in 1:(nrow(LApl.dat)-1)) {
+  LApl.dat[i,1] = LApl.cats[i]
+  LApl.dat[i,2] <- nrow(subset(LApl.funcs.sorted1,Subsystem %in% LApl.cats[i]))
+  LApl.dat[i,3] <- nrow(subset(LApl.funcs.sorted1,Subsystem %in% LApl.cats[i] & Distribution=='Accessory'))
+}
+LApl.dat[82,1] = 'Total'
+LApl.dat[82,2] <- nrow(LApl.funcs.sorted1)
+LApl.dat[82,3] <- nrow(subset(LApl.funcs.sorted1,Distribution=='Accessory'))
+
+LApl.pvals = matrix(nrow=length(LApl.cats),ncol = 4)
+
+for(i in 1:(nrow(LApl.dat)-1)) {
+  x = rbind(LApl.dat[82,2:3],LApl.dat[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  LApl.pvals[i,1] <- LApl.dat[i,1]
+  print(fisher.test(z,alternative='g'))
+  LApl.pvals[i,3] <- fisher.test(z,alternative='g')$p.value
+  LApl.pvals[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+LApl.pvals[,4] = p.adjust(LApl.pvals[,3],method='fdr')
+
+########carbohydrate analysis to look for enriched subsystems
+LApl.c = as.data.frame(subset(LApl.funcs.sorted1,Cat.id == "C"))
+LApl.sub = unique(LApl.c$Subsystem)
+LApl.dat2 = matrix(nrow=length(LApl.sub)+1,ncol = 3)
+
+for(i in 1:(nrow(LApl.dat2)-1)) {
+  LApl.dat2[i,1] = LApl.sub[i]
+  LApl.dat2[i,2] <- nrow(subset(LApl.c,Subsystem %in% LApl.sub[i]))
+  LApl.dat2[i,3] <- nrow(subset(LApl.c,Subsystem %in% LApl.sub[i] & Distribution=='Accessory'))
+}
+LApl.dat2[33,1] = 'Total'
+LApl.dat2[33,2] <- nrow(LApl.c)
+LApl.dat2[33,3] <- nrow(subset(LApl.c,Distribution=='Accessory'))
+
+LApl.pvals2 = matrix(nrow=length(LApl.sub),ncol = 4)
+
+for(i in 1:(nrow(LApl.dat2)-1)) {
+  x = rbind(LApl.dat2[33,2:3],LApl.dat2[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  LApl.pvals2[i,1] <- LApl.dat2[i,1]
+  print(fisher.test(z,alternative='g'))
+  LApl.pvals2[i,3] <- fisher.test(z,alternative='g')$p.value
+  LApl.pvals2[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+LApl.pvals2[,4] = p.adjust(LApl.pvals2[,3],method='fdr')
+
+########carbohydrate analysis to look for enriched subsystems
+LApl.c = as.data.frame(subset(LApl.funcs.sorted1,Cat.id == "Ni"))
+LApl.sub = unique(LApl.c$Subsystem)
+LApl.dat2 = matrix(nrow=length(LApl.sub)+1,ncol = 3)
+
+for(i in 1:(nrow(LApl.dat2)-1)) {
+  LApl.dat2[i,1] = LApl.sub[i]
+  LApl.dat2[i,2] <- nrow(subset(LApl.c,Subsystem %in% LApl.sub[i]))
+  LApl.dat2[i,3] <- nrow(subset(LApl.c,Subsystem %in% LApl.sub[i] & Distribution=='Accessory'))
+}
+LApl.dat2[3,1] = 'Total'
+LApl.dat2[3,2] <- nrow(LApl.c)
+LApl.dat2[3,3] <- nrow(subset(LApl.c,Distribution=='Accessory'))
+
+LApl.pvals2 = matrix(nrow=length(LApl.sub),ncol = 4)
+
+for(i in 1:(nrow(LApl.dat2)-1)) {
+  x = rbind(LApl.dat2[3,2:3],LApl.dat2[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  LApl.pvals2[i,1] <- LApl.dat2[i,1]
+  print(fisher.test(z,alternative='g'))
+  LApl.pvals2[i,3] <- fisher.test(z,alternative='g')$p.value
+  LApl.pvals2[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+LApl.pvals2[,4] = p.adjust(LApl.pvals2[,3],method='fdr')
+
+```
+
+```{r}
+PRr.enrich = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/Roary_analysis/PRr/PRr_roary/PRr_gene_presence_absence_withCOGs.csv")
+
+met.func.expanded1 = do.call(rbind,met.func.expanded)
+
+#use the met.func.expanded function to get the functions
+PRr.funcs = list()
+for(i in 1:nrow(PRr.enrich)) {
+  PRr.funcs[[i]] <- subset(met.func.expanded1,Features%in%PRr.enrich[i,44])
+  PRr.funcs[[i]]$Distribution <- rep(PRr.enrich[i,21])
+}
+
+PRr.funcs1 = do.call(rbind,PRr.funcs)
+
+#remove any functional categories not related to primary metabolism
+PRr.funcs.sorted = subset(PRr.funcs1,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(PRr.funcs1))
+
+PRr.funcs.sorted1 = subset(PRr.funcs.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(PRr.funcs.sorted))
+
+PRr.funcs.sorted1$Cat.id = rep('A')
+
+for(i in 1:nrow(PRr.funcs.sorted1)) {
+  ifelse(PRr.funcs.sorted1[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments',PRr.funcs.sorted1[i,8] <- 'V',
+  ifelse(PRr.funcs.sorted1[i,2] %in% 'Carbohydrates',PRr.funcs.sorted1[i,8] <- 'C',
+  ifelse(PRr.funcs.sorted1[i,2] %in% 'Nitrogen Metabolism',PRr.funcs.sorted1[i,8] <- 'Ni',
+  ifelse(PRr.funcs.sorted1[i,2] %in% 'Amino Acids and Derivatives',PRr.funcs.sorted1[i,8] <- 'A',
+  ifelse(PRr.funcs.sorted1[i,2] %in% 'Fatty Acids, Lipids, and Isoprenoids',PRr.funcs.sorted1[i,8] <- 'L',
+  PRr.funcs.sorted1[i,8] <- 'Nu')))))
+}
+
+PRr.cats = unique(PRr.funcs.sorted1$Subsystem)
+PRr.dat = matrix(nrow=length(PRr.cats)+1,ncol = 3)
+
+for(i in 1:(nrow(PRr.dat)-1)) {
+  PRr.dat[i,1] = PRr.cats[i]
+  PRr.dat[i,2] <- nrow(subset(PRr.funcs.sorted1,Subsystem %in% PRr.cats[i]))
+  PRr.dat[i,3] <- nrow(subset(PRr.funcs.sorted1,Subsystem %in% PRr.cats[i] & Distribution=='Accessory'))
+}
+PRr.dat[106,1] = 'Total'
+PRr.dat[106,2] <- nrow(PRr.funcs.sorted1)
+PRr.dat[106,3] <- nrow(subset(PRr.funcs.sorted1,Distribution=='Accessory'))
+
+PRr.pvals = matrix(nrow=length(PRr.cats),ncol = 4)
+
+for(i in 1:(nrow(PRr.dat)-1)) {
+  x = rbind(PRr.dat[106,2:3],PRr.dat[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  PRr.pvals[i,1] <- PRr.dat[i,1]
+  print(fisher.test(z,alternative='g'))
+  PRr.pvals[i,3] <- fisher.test(z,alternative='g')$p.value
+  PRr.pvals[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+PRr.pvals[,4] = p.adjust(PRr.pvals[,3],method='fdr')
+```
+
+```{r}
+T.enrich = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/Roary_analysis/T/T_roary/T_gene_presence_absence_withCOGs.csv")
+
+met.func.expanded1 = do.call(rbind,met.func.expanded)
+
+#use the met.func.expanded function to get the functions
+T.funcs = list()
+for(i in 1:nrow(T.enrich)) {
+  T.funcs[[i]] <- subset(met.func.expanded1,Features%in%T.enrich[i,45])
+  T.funcs[[i]]$Distribution <- rep(T.enrich[i,22])
+}
+
+T.funcs1 = do.call(rbind,T.funcs)
+
+#remove any functional categories not related to primary metabolism
+T.funcs.sorted = subset(T.funcs1,Category == 'Amino Acids and Derivatives' | Category == 'Carbohydrates' | Category == 'Cofactors, Vitamins, Prosthetic Groups, Pigments' | Category == 'Fatty Acids, Lipids, and Isoprenoids' | Category == 'Nitrogen Metabolism' | Category == 'Nucleosides and Nucleotides',select=colnames(T.funcs1))
+
+T.funcs.sorted1 = subset(T.funcs.sorted,Subsystem != 'Hopanes' & Subsystem != 'Polyhydroxybutyrate metabolism' & Subsystem != 'Nitrosative stress' & Subsystem != 'Cyanate hydrolysis' & Subsystem != 'Nitrilase' & Subcategory != 'Nucleosides and Nucleotides - no subcategory' & Subcategory != 'Detoxification',select=colnames(T.funcs.sorted))
+
+T.funcs.sorted1$Cat.id = rep('A')
+
+for(i in 1:nrow(T.funcs.sorted1)) {
+  ifelse(T.funcs.sorted1[i,2] %in% 'Cofactors, Vitamins, Prosthetic Groups, Pigments',T.funcs.sorted1[i,8] <- 'V',
+  ifelse(T.funcs.sorted1[i,2] %in% 'Carbohydrates',T.funcs.sorted1[i,8] <- 'C',
+  ifelse(T.funcs.sorted1[i,2] %in% 'Nitrogen Metabolism',T.funcs.sorted1[i,8] <- 'Ni',
+  ifelse(T.funcs.sorted1[i,2] %in% 'Amino Acids and Derivatives',T.funcs.sorted1[i,8] <- 'A',
+  ifelse(T.funcs.sorted1[i,2] %in% 'Fatty Acids, Lipids, and Isoprenoids',T.funcs.sorted1[i,8] <- 'L',
+  T.funcs.sorted1[i,8] <- 'Nu')))))
+}
+
+T.cats = unique(T.funcs.sorted1$Subsystem)
+T.dat = matrix(nrow=length(T.cats)+1,ncol = 3)
+
+for(i in 1:(nrow(T.dat)-1)) {
+  T.dat[i,1] = T.cats[i]
+  T.dat[i,2] <- nrow(subset(T.funcs.sorted1,Subsystem %in% T.cats[i]))
+  T.dat[i,3] <- nrow(subset(T.funcs.sorted1,Subsystem %in% T.cats[i] & Distribution=='Accessory'))
+}
+T.dat[91,1] = 'Total'
+T.dat[91,2] <- nrow(T.funcs.sorted1)
+T.dat[91,3] <- nrow(subset(T.funcs.sorted1,Distribution=='Accessory'))
+
+T.pvals = matrix(nrow=length(T.cats),ncol = 4)
+
+for(i in 1:(nrow(T.dat)-1)) {
+  x = rbind(T.dat[91,2:3],T.dat[i,2:3])
+  x = as.data.frame(x)
+  x$V1 = as.numeric(as.character(x$V1))
+  x$V2 = as.numeric(as.character(x$V2))
+  y = x[1,]-x[2,]
+  z = rbind(x[2,],y)
+  z = t(z)
+  z = rbind(z[2,],z[1,])
+  T.pvals[i,1] <- T.dat[i,1]
+  print(fisher.test(z,alternative='g'))
+  T.pvals[i,3] <- fisher.test(z,alternative='g')$p.value
+  T.pvals[i,2] <- fisher.test(z,alternative='g')$estimate
+}
+
+T.pvals[,4] = p.adjust(T.pvals[,3],method='fdr')
+```
+
+###Accessory genome heatmap
+```{r}
+library(pheatmap)
+library(reshape2)
+library(RColorBrewer)
+#combine the seven above to get the number of functions found in the core and accessory for each species. use pretty heatmap to plot each indvidually.
+Ath.count = as.data.frame(Ath.funcs.sorted1[,7:8])
+Ath.count$species = rep('Ath')
+
+Gc.count = as.data.frame(Gc.funcs.sorted1[,7:8])
+Gc.count$species = rep('Gc')
+
+Gk.count = as.data.frame(Gk.funcs.sorted1[,7:8])
+Gk.count$species = rep('Gk')
+
+LAb.count = as.data.frame(LAb.funcs.sorted1[,7:8])
+LAb.count$species = rep('LAb')
+
+LApl.count = as.data.frame(LApl.funcs.sorted1[,7:8])
+LApl.count$species = rep('LApl')
+
+PRr.count = as.data.frame(PRr.funcs.sorted1[,7:8])
+PRr.count$species = rep('PRr')
+
+T.count = as.data.frame(T.funcs.sorted1[,7:8])
+T.count$species = rep('T')
+
+count.dat = rbind(Ath.count,Gc.count,Gk.count,LAb.count,LApl.count,PRr.count,T.count)
+
+count.dat1 = as.data.frame(table(count.dat))
+
+count.accessory = subset(count.dat1,Distribution=='Accessory',select=c(Cat.id,species,Freq))
+count.accessory$Freq = as.numeric(count.accessory$Freq)
+count.accessory1 = dcast(count.accessory,species~Cat.id)
+row.names(count.accessory1) <- count.accessory1$species
+
+for(i in 1:nrow(count.accessory1)) {
+  for(j in 1:ncol(count.accessory1)) {
+    if(count.accessory1[i,j] == 0) {
+      count.accessory1[i,j]<-NA
+    }
+  }
+}
+
+col.dat = brewer.pal(9,'YlGnBu')
+
+pheatmap(as.matrix(count.accessory1[,2:7]),color = col.dat,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE,cluster_cols=FALSE,legend=TRUE,show_rownames=TRUE,show_colnames = TRUE)
+
+count.core = subset(count.dat1,Distribution=='Core',select=c(Cat.id,species,Freq))
+count.core$Freq = as.numeric(count.core$Freq)
+count.core1 = dcast(count.core,species~Cat.id)
+row.names(count.core1) <- count.core1$species
+
+for(i in 1:nrow(count.core1)) {
+  for(j in 1:ncol(count.core1)) {
+    if(count.core1[i,j] == 0) {
+      count.core1[i,j]<-NA
+    }
+  }
+}
+
+col.dat = brewer.pal(9,'YlGnBu')
+
+pheatmap(as.matrix(count.core1[,2:7]),color = col.dat,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE,cluster_cols=FALSE,legend=TRUE,show_rownames=TRUE,show_colnames = TRUE)
+```
+
+```{r}
+Ath.acc = subset(Ath.funcs.sorted1,Distribution=='Accessory',select=c(Cat.id,Subcategory,Subsystem,Role))
+Ath.acc$taxa = rep('Ath')
+
+Gc.acc = subset(Gc.funcs.sorted1,Distribution=='Accessory',select=c(Cat.id,Subcategory,Subsystem,Role))
+Gc.acc$taxa = rep('Gc')
+
+Gk.acc = subset(Gk.funcs.sorted1,Distribution=='Accessory',select=c(Cat.id,Subcategory,Subsystem,Role))
+Gk.acc$taxa = rep('Gk')
+
+LAb.acc = subset(LAb.funcs.sorted1,Distribution=='Accessory',select=c(Cat.id,Subcategory,Subsystem,Role))
+LAb.acc$taxa = rep('LAb')
+
+LApl.acc = subset(LApl.funcs.sorted1,Distribution=='Accessory',select=c(Cat.id,Subcategory,Subsystem,Role))
+LApl.acc$taxa = rep('LApl')
+
+PRr.acc = subset(PRr.funcs.sorted1,Distribution=='Accessory',select=c(Cat.id,Subcategory,Subsystem,Role))
+PRr.acc$taxa = rep('PRr')
+
+T.acc = subset(T.funcs.sorted1,Distribution=='Accessory',select=c(Cat.id,Subcategory,Subsystem,Role))
+T.acc$taxa = rep('T')
+
+acc = rbind(Ath.acc,Gc.acc,Gk.acc,LAb.acc,LApl.acc,PRr.acc,T.acc)
+
+acctb = dcast(acc,Cat.id+Subcategory+Subsystem+Role~taxa,length)
+
+write.csv(acctb,"/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Pangenome_analysis/met_subset/Roary_analysis/accessory_function_species_comparison.csv")
+```
+
+#Fig. S1 Average nucleotide identity (ANI) heatmaps showing results from JSpecies
+##ANI heatmap
+```{r}
+library(gplots)
+library(pheatmap)
+library(RColorBrewer)
+
+#import ani scores
+lacto_ani = read.csv('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/ANI/Lactobacillales_ANI.csv')
+row.names(lacto_ani) <- lacto_ani$X
+lacto_ani = lacto_ani[,-1]
+
+entero_ani = read.csv('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/ANI/Enterobacterales_ANI.csv')
+row.names(entero_ani) <- entero_ani$X
+entero_ani = entero_ani[,-1]
+
+aceto_ani = read.csv('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/ANI/Rhodospirillales_ANI.csv')
+row.names(aceto_ani) <- aceto_ani$X
+aceto_ani = aceto_ani[,-1]
+
+#convert to presence (>= 95%) and absence (<95%) for heatmaps
+for(i in 1:ncol(lacto_ani)) {
+  for(j in 1:nrow(lacto_ani))
+  ifelse(lacto_ani[j,i] < 95,lacto_ani[j,i] <- 0,lacto_ani[j,i] <- 1)
+}
+
+for(i in 1:ncol(entero_ani)) {
+  for(j in 1:nrow(entero_ani))
+  ifelse(entero_ani[j,i] < 95,entero_ani[j,i] <- 0,entero_ani[j,i] <- 1)
+}
+
+for(i in 1:ncol(aceto_ani)) {
+  for(j in 1:nrow(aceto_ani))
+  ifelse(aceto_ani[j,i] < 95,aceto_ani[j,i] <- 0,aceto_ani[j,i] <- 1)
+}
+
+
+#heatmap.pdf
+pheatmap(lacto_ani,color=c('white','black'),treeheight_row = 0, treeheight_col = 0,legend=FALSE,fontsize = 10)
+
+pheatmap(entero_ani,color=c('white','black'),treeheight_row = 0, treeheight_col = 0,legend=FALSE,fontsize = 10)
+
+pheatmap(aceto_ani,color=c('white','black'),treeheight_row = 0, treeheight_col = 0,legend=FALSE,fontsize = 10)
+```
+
+#Mostly Fig S2 and S4, but also Fig. 1
+##draw the species tree and 16S tree
+##draw the tanglegrams between species and 16S trees
+```{r}
+library(treeio)
+library(ggtree)
+library(ape)
+library(phytools)
+library(car)
+library(emmeans)
+library(ggplot2)
+library(vegan)
+library(phangorn)
+library(dendextend)
+library(geiger)
+library(phylogram)
+library(seqinr)
+
+ids = read.csv('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Comparative_genomics_proj/genome_meta_data_RAST.csv')
+
+rename = read.csv('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Comparative_genomics_proj/genome_strain_rename.csv')
+
+#species tree from phylogenetic ml analysis
+
+speciesphylo = read.iqtree("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Species_tree/iqtree_results_updated/concatenated_species_aa.fasta.treefile")
+specieso = as.phylo(speciesphylo)
+species = rename_taxa(specieso,rename,tip,tip_new)
+
+#16s tree from phylogenetic ml analysis
+
+treephylo = read.iqtree("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/16S_tree/200813030150_IQTREE_rename/16S_rRNA_gblocks_9refs2_rename.fasta.treefile")
+treeo = as.phylo(treephylo)
+tree = rename_taxa(treeo,rename,tip,tip_new)
+
+#########################
+
+#cophenetic distance calculations and mantel correlation test between them (protest was included as a sanity check, but mantel test is more interpretable)
+
+gene.cophen = cophenetic.phylo(tree)
+species.cophen = cophenetic.phylo(species)
+species.cophen = species.cophen[row.names(gene.cophen),colnames(gene.cophen)]
+
+mantel(gene.cophen, species.cophen, method="spearman", permutations=999)
+protest(gene.cophen, species.cophen,permutations = 999)
+
+#########################
+
+#normalized Robinson Foulds (nRF) between species and 16S phylogenies, both were rooted to B. subtilis
+RF.species = root(species,"B. subtilis")
+plotTree(RF.species)
+RF.tree = root(tree,"B. subtilis")
+plotTree(RF.tree)
+RF.dist(RF.species, RF.tree, normalize = TRUE, check.labels = TRUE,rooted = FALSE) # 0.5
+
+
+name.check(species,tree,data.names=tree$tip.label)
+
+#tanglegram
+dendlist(as.cladogram(as.dendrogram(species)),as.cladogram(as.dendrogram.phylo(tree))) %>%
+  untangle(method = "step1side") %>% # Find the best alignment layout
+  tanglegram(highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE) %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+
+#######################
+
+#investigate the nRF for each order; subset tip names to select clades
+
+lac = subset(rename,Order == 'Lactobacillales',select = 'tip_new')
+enter = subset(rename,Order == 'Enterobacterales',select = 'tip_new')
+aceto = subset(rename,Order == 'Rhodospirillales',select = 'tip_new')
+
+#######################
+
+#Lactobacillales clade - The following analysis looked specifically at the nRF values and the mantel spearman correlation between the phylogenomic and 16S phylogenetic anlayses. In addition, the code for plotting the Order-specific phylogenies is included here.
+
+plotTree(tree)
+lac.tree = keep.tip(tree, c(as.matrix(lac),'B. subtilis','E. faecalis','S. pyogenes'))
+lac.tree2 = reroot(lac.tree,interactive = TRUE) #select about a quarter down from the b and e split on b edge
+plotTree(species)
+lac.species = extract.clade(species,interactive=TRUE)
+plotTree(lac.species)
+RF.dist(lac.tree2, lac.species, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.25
+
+lacto.gene.cophen = cophenetic.phylo(lac.tree2)
+lacto.species.cophen = cophenetic.phylo(lac.species)
+lacto.species.cophen = lacto.species.cophen[row.names(lacto.gene.cophen),colnames(lacto.gene.cophen)]
+
+mantel(lacto.gene.cophen, lacto.species.cophen, method="spearman", permutations=999) #r=0.8727,p=0.001
+protest(lacto.gene.cophen, lacto.species.cophen,permutations = 999)
+
+dendlist(as.cladogram(as.dendrogram(lac.species)),as.cladogram(as.dendrogram.phylo(lac.tree2))) %>%
+  untangle(method = "step2side") %>% # Find the best alignment layout
+  tanglegram(common_subtrees_color_branches = TRUE,highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE,margin_inner=6) %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+
+plotTree(lac.species,node.numbers=TRUE)
+
+ggtree(lac.species) + geom_text2(aes(subset=!isTip, label=node), hjust=-.3) + geom_tiplab()
+
+#draw the species phylogeny
+ggtree(lac.species) +
+  geom_tiplab(aes(subset=label!='B. subtilis' & label!='E. faecalis' & label!='S. pyogenes'&label!=100&label!=98&label!=86&label!=84&label!=94&label!=71&label!=99&label!=97&label!=95),size=8) +
+  geom_tiplab(aes(subset = label=="B. subtilis" | label=='E. faecalis' | label == 'S. pyogenes'),fontface='italic',size=8) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 50 & as.numeric(label) <=70),fill='white',pch=23,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 70),fill='white',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 80),fill='gray',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 95),fill='black',pch=21,size=5) +
+  geom_treescale(fontsize = 8,x=-0.00000001)
+  
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/lacto_species_tree.pdf",width = 23,height=14,unit='in',limitsize = FALSE)
+
+plotTree(lac.tree,node.numbers=TRUE) 
+
+#draw the 16S phylogeny
+ggtree(lac.tree2) +
+  geom_tiplab(aes(subset=label!='B. subtilis' & label!='E. faecalis' & label!='S. pyogenes' & label!='Root'&label!=92&label!=96&label!=98&label!=100&label!=84&label!=56&label!=90&label!=97&label!=77&label!=93&label!=53&label!=99),size=8) +
+  geom_tiplab(aes(subset = label=="B. subtilis" | label=='E. faecalis' | label == 'S. pyogenes' &label!='Root'),fontface='italic',size=8) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 50 & as.numeric(label) <=70),fill='white',pch=23,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 70),fill='white',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 80),fill='gray',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 95),fill='black',pch=21,size=5) +
+  geom_treescale(fontsize = 8,x=-0.0000001)
+  
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/lacto_16S_tree.pdf",width = 24,height=14,unit='in',limitsize = FALSE)
+
+#############################
+
+#Enterobacterales clade - The following analysis looked specifically at the nRF values and the mantel spearman correlation between the phylogenomic and 16S phylogenetic anlayses. In addition, the code for plotting the Order-specific phylogenies is included here.
+
+species2 = root(species,'B. subtilis')
+plotTree(species2)
+enter.species = extract.clade(species2,interactive=TRUE)
+plotTree(enter.species)
+
+tree2 = root(tree,'B. subtilis')
+plotTree(tree2)
+enter.tree = extract.clade(tree2,interactive=TRUE)
+plotTree(enter.tree)
+enter.tree2 = reroot(enter.tree,interactive = TRUE) #select about a quarter down from the initial split for Vcholerae to give some distance between the node and tip to reroot
+
+RF.dist(enter.tree, enter.species, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.4666667
+
+entero.gene.cophen = cophenetic.phylo(enter.tree2)
+entero.species.cophen = cophenetic.phylo(enter.species)
+entero.species.cophen = entero.species.cophen[row.names(entero.gene.cophen),colnames(entero.gene.cophen)]
+
+mantel(entero.gene.cophen, entero.species.cophen, method="spearman", permutations=999) #r = 0.8914, p = 0.001
+protest(entero.gene.cophen, entero.species.cophen,permutations = 999)
+
+dendlist(as.cladogram(as.dendrogram(enter.species)),as.cladogram(as.dendrogram.phylo(enter.tree2))) %>%
+  untangle(method = "step2side") %>% # Find the best alignment layout
+  tanglegram(common_subtrees_color_branches = TRUE,highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE,margin_inner=6) %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+
+#draw the species phylogeny
+ggtree(enter.species) +
+  geom_tiplab(aes(subset=label!='H. influenzae' & label!='P. multocida' & label!='V. cholerae'&label!=100&label!=92&label!=95&label!=99&label!=49&label!=96),size=8) +
+  geom_tiplab(aes(subset = label=="H. influenzae" | label=='P. multocida' | label == 'V. cholerae'),fontface='italic',size=8) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 50 & as.numeric(label) <=70),fill='white',pch=23,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 70),fill='white',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 80),fill='gray',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 95),fill='black',pch=21,size=5) +
+  geom_treescale(fontsize = 8,x=-0.00000001)
+  
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/enteric_species_tree.pdf",width = 21,height=14,unit='in',limitsize = FALSE)
+
+#draw the 16S phylogeny
+ggtree(enter.tree2) +
+  geom_tiplab(aes(subset=label!='H. influenzae' & label!='P. multocida' & label!='V. cholerae'&label!='Root'&label!=85&label!=76&label!=72&label!=92&label!=74&label!=99&label!=100&label!=84&label!=81&label!=96&label!=71&label!=64&label!=58&label!=98&label!=89&label!=62&label!=71&label!=82&label!=90&label!=72&label!=79),size=8) +
+  geom_tiplab(aes(subset = label=="H. influenzae" | label=='P. multocida' | label == 'V. cholerae'),fontface='italic',size=8) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 50 & as.numeric(label) <=70),fill='white',pch=23,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 70),fill='white',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 80),fill='gray',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 95),fill='black',pch=21,size=5) +
+  geom_treescale(fontsize = 8,x=-0.00000001)
+  
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/enteric_16S_tree.pdf",width = 40,height=14,unit='in',limitsize = FALSE)
+
+############################
+
+#Rhodospirillales clade - The following analysis looked specifically at the nRF values and the mantel spearman correlation between the phylogenomic and 16S phylogenetic anlayses. In addition, the code for plotting the Order-specific phylogenies is included here.
+
+species2 = root(species2,'B. subtilis')
+plotTree(species2)
+aceto.species = extract.clade(species2,interactive=TRUE)
+plotTree(aceto.species)
+
+plotTree(tree)
+aceto.tree = extract.clade(tree,interactive=TRUE)
+plotTree(aceto.tree)
+
+RF.dist(aceto.tree, aceto.species, normalize = TRUE, check.labels = TRUE,rooted = FALSE) # 0.6521739
+
+aceto.gene.cophen = cophenetic.phylo(aceto.tree)
+aceto.species.cophen = cophenetic.phylo(aceto.species)
+aceto.species.cophen = aceto.species.cophen[row.names(aceto.gene.cophen),colnames(aceto.gene.cophen)]
+
+mantel(aceto.gene.cophen, aceto.species.cophen, method="spearman", permutations=999) #r = 0.8949, p = 0.001
+protest(aceto.gene.cophen, aceto.species.cophen,permutations = 999)
+
+dendlist(as.cladogram(as.dendrogram(aceto.species)),as.cladogram(as.dendrogram.phylo(aceto.tree))) %>%
+  untangle(method = "step2side") %>% # Find the best alignment layout
+  tanglegram(common_subtrees_color_branches = TRUE,highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE,margin_inner=7) %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+
+#draw the species phylogeny 
+
+ggtree(aceto.species) +
+  geom_tiplab(aes(subset=label!='M. magneticum' & label!='G. bethesdensis' & label!='R. rubrum'&label!=85&label!=76&label!=72&label!=92&label!=74&label!=99&label!=100&label!=84&label!=81&label!=96&label!=71&label!=64&label!=58&label!=98&label!=89&label!=62&label!=71&label!=82&label!=90&label!=72&label!=79&label!=34&label!=33&label!=97&label!=75&label!=91&label!=78&label!=77&label!=95&label!=93&label!=53&label!=73&label!=43&label!=65&label!=57&label!=38),size=8) +
+  geom_tiplab(aes(subset = label=="M. magneticum" | label=='G. bethesdensis' | label == 'R. rubrum'),fontface='italic',size=8) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 50 & as.numeric(label) <=70),fill='white',pch=23,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 70),fill='white',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 80),fill='gray',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 95),fill='black',pch=21,size=5) +
+  geom_treescale(fontsize = 8,x=0.01) 
+  
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/aceto_species_tree.pdf",width = 18,height=15,unit='in',limitsize = FALSE)
+
+#draw the 16S phylogney 
+
+ggtree(aceto.tree) +
+  geom_tiplab(aes(subset=label!='M. magneticum' & label!='G. bethesdensis' & label!='R. rubrum'&label!=85&label!=76&label!=72&label!=92&label!=74&label!=99&label!=100&label!=84&label!=81&label!=96&label!=71&label!=64&label!=58&label!=98&label!=89&label!=62&label!=71&label!=82&label!=90&label!=72&label!=79&label!=34&label!=33&label!=97&label!=75&label!=91&label!=78&label!=77&label!=95&label!=93&label!=53&label!=73&label!=88&label!=83&label!=67&label!=63),size=8) +
+  geom_tiplab(aes(subset = label=="M. magneticum" | label=='G. bethesdensis' | label == 'R. rubrum'),fontface='italic',size=8) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 50 & as.numeric(label) <=70),fill='white',pch=23,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 70),fill='white',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 80),fill='gray',pch=21,size=5) +
+  geom_nodepoint(aes(label=label, subset = !is.na(as.numeric(label)) & as.numeric(label) > 95),fill='black',pch=21,size=5) +
+  geom_treescale(fontsize = 8,x=-0.0000001)
+  
+ggsave("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/aceto_16S_tree.pdf",width = 19,height=14,unit='in',limitsize = FALSE)
+```
+
+#Fig. S4 Correlation between phylogeny and function
+```{r}
+library(treeio)
+library(ggtree)
+library(ape)
+library(phytools)
+library(car)
+library(emmeans)
+library(ggplot2)
+library(vegan)
+library(phangorn)
+library(dendextend)
+library(geiger)
+library(phylogram)
+
+rename = read.csv('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Comparative_genomics_proj/genome_strain_rename.csv')
+
+#bray-curtis of relative counts
+subs.p = decostand(subs.taxa[,9:46],'total')  
+x = subset(rename,Order != 'ref',select=colnames(rename))
+row.names(subs.p) <- x$tip_new #updates strian IDs
+subs.p.tree = subs.p[row.names(tree.dist),]
+bc.tree = vegdist(subs.p.tree,method='bray')
+
+subs.p.species = subs.p[row.names(species.dist),]
+bc.species = vegdist(subs.p.species,method='bray')
+
+#species tree from phylogenetic ml analysis
+
+speciesphylo = read.iqtree("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Species_tree/iqtree_results_updated/concatenated_species_aa.fasta.treefile")
+specieso = as.phylo(speciesphylo)
+species = rename_taxa(specieso,rename,tip,tip_new)
+species.dist.species <-drop.tip(species, c("H. influenzae","P. multocida","V. cholerae","S. pyogenes","B. subtilis","E. faecalis","M. magneticum","R. rubrum","G. bethesdensis"))
+
+species.dist = cophenetic.phylo(species.dist.species)
+
+#dendogram from pvclust
+metclust = read.newick('/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/metabolic_cluster_bray_ward.nwk')
+
+ids %>% arrange(metclust$tip.label)
+
+d <- rename_taxa(metclust,ids,name,tip)
+d2 <- rename_taxa(d,x,tip,tip_new) #updated strian IDs
+
+#16s tree from phylogenetic ml analysis
+treephylo = read.iqtree("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/16S_tree/200813030150_IQTREE_rename/16S_rRNA_gblocks_9refs2_rename.fasta.treefile")
+tree = as.phylo(treephylo)
+tree = rename_taxa(tree,rename,tip,tip_new)
+
+#remove reference 16s strains
+tree.dist.tree <-drop.tip(tree, c("H. influenzae","P. multocida","V. cholerae","S. pyogenes","B. subtilis","E. faecalis","M. magneticum","R. rubrum","G. bethesdensis"))
+
+#calculate cophenetic distance
+tree.dist = cophenetic.phylo(tree.dist.tree)
+
+
+###########################
+
+#mantel test
+
+mantel(bc.tree, tree.dist, method="spearman", permutations=999) #r=0.6768,p-0.001
+
+#Procrustean permutation test is another method that can be applied --> gives similar result, I like the mantel just because it is a bit more intuitive and there is no ordination really to show for the matrices
+protest(bc.tree, tree.dist,permutations = 999)
+
+################################
+
+#mantel test to compare the species tree and the function dendrogram
+mantel(bc.species, species.dist, method="spearman", permutations=999) #r=0.7944, p = 0.001
+
+################################
+
+#normalized robinson folds; conduct for the full tree and each order
+tree_test = root(tree.dist.tree,'LlBpl1') #root to L. lactis
+RF.dist(d2, tree_test, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.6236559
+
+name.check(tree_test,d2,data.names=d2$tip.label)
+
+dendlist(as.cladogram(as.dendrogram(tree_test)),as.cladogram(as.dendrogram.phylo(d2))) %>%
+  untangle(method = "step2side") %>% # Find the best alignment layout
+  tanglegram(common_subtrees_color_branches = TRUE,highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE,margin_inner=5,margin_top = 1,lab.cex=0.75)  %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+
+species_test = root(species.dist.tree,'LlBpl1')
+RF.dist(d2, species_test, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.5268817
+
+name.check(species.dist.tree,d2,data.names=d2$tip.label)
+
+dendlist(as.cladogram(as.dendrogram(species_test)),as.cladogram(as.dendrogram.phylo(d2))) %>%
+  untangle(method = "step2side") %>% # Find the best alignment layout
+  tanglegram(common_subtrees_color_branches = TRUE,highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE,margin_inner=5,margin_top = 1,lab.cex=0.75)  %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+
+#investigate the nRF for each order
+
+lac = subset(rename,Order == 'Lactobacillales',select = 'tip_new')
+enter = subset(rename,Order == 'Enterobacterales',select = 'tip_new')
+aceto = subset(rename,Order == 'Rhodospirillales',select = 'tip_new')
+
+lac.tree = keep.tip(tree_test, as.matrix(lac))
+lac.met = keep.tip(d2,as.matrix(lac))
+RF.dist(lac.tree, lac.met, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.4705882
+
+lac.species = keep.tip(species_test, as.matrix(lac))
+RF.dist(lac.species, lac.met, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.5294118
+
+dendlist(as.cladogram(as.dendrogram(lac.met)),as.cladogram(as.dendrogram.phylo(lac.tree))) %>%
+  untangle(method = "step2side") %>% # Find the best alignment layout
+  tanglegram(common_subtrees_color_branches = TRUE,highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE,margin_inner=5) %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+
+
+enter.tree = keep.tip(tree_test, as.matrix(enter))
+enter.met = keep.tip(d2,as.matrix(enter))
+RF.dist(enter.tree, enter.met, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.6296296
+
+enter.species = keep.tip(species_test, as.matrix(enter))
+RF.dist(enter.species, enter.met, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.3703704
+
+dendlist(as.cladogram(as.dendrogram(enter.met)),as.cladogram(as.dendrogram.phylo(enter.tree))) %>%
+  untangle(method = "step2side") %>% # Find the best alignment layout
+  tanglegram(common_subtrees_color_branches = TRUE,highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE,margin_inner=5) %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+
+
+aceto.tree = keep.tip(tree_test, as.matrix(aceto))
+aceto.met = keep.tip(d2,as.matrix(aceto))
+RF.dist(aceto.tree, aceto.met, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.6976744
+
+aceto.species = keep.tip(species_test, as.matrix(aceto))
+RF.dist(aceto.species, aceto.met, normalize = TRUE, check.labels = TRUE,rooted = FALSE) #0.6511628
+
+dendlist(as.cladogram(as.dendrogram(aceto.met)),as.cladogram(as.dendrogram.phylo(aceto.tree))) %>%
+  untangle(method = "step2side") %>% # Find the best alignment layout
+  tanglegram(common_subtrees_color_branches = TRUE,highlight_distinct_edges = FALSE, highlight_branches_lwd = FALSE,margin_inner=5) %>%# Draw the two dendrograms
+  entanglement() #score between 0 and 1, closer to 0 is a better alignment
+```
+
+#Fig. S5 orthogroup comparison among all 96 strains and correlation with metabolism-related subset
+##PCoA of gene family incidence for metabolism and whole genome
+```{r}
+library(vegan)
+library(ggplot2)
+
+#import the metabolism related orthogroups
+og.pa.met.pcoa = read.csv("/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa.csv")
+
+#select those with 3 or more genomes represented
+og.pa.met.pcoa$Total = rowSums(og.pa.met.pcoa[,3:98])
+og.pa.met.pcoa = og.pa.met.pcoa[,2:99]
+colnames(og.pa.met.pcoa)[1] <- 'OGs'
+row.names(og.pa.met.pcoa) <- og.pa.met.pcoa$OGs
+og.pa.met.pcoa1 <- t(subset(og.pa.met.pcoa,Total>2,select=colnames(og.pa.met.pcoa[,2:98])))
+
+for(i in 1:nrow(og.pa.met.pcoa1)) {
+  for(j in 1:nrow(rename)) {
+    if(grepl(rename[j,8],row.names(og.pa.met.pcoa1)[i])) {
+      row.names(og.pa.met.pcoa1)[i] <- rename[j,10]
+    }
+  }
+}
+
+og.pa.met.pcoa1 <- og.pa.met.pcoa1[1:96,]
+
+pcoa.id = as.data.frame(matrix(nrow=96,ncol=2))
+
+for(i in 1:96) {
+  pcoa.id[i,1] <- row.names(og.pa.met.pcoa1)[i]
+  pcoa.id[i,2] <- subset(rename,tip_new %in% row.names(og.pa.met.pcoa1)[i],select=Order)
+}
+
+write.csv(og.pa.met.pcoa1,"/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa_3plus_forpcoa.csv")
+
+#variation by taxonomic grouping by PERMANOVA
+adonis(og.pa.met.pcoa1 ~ pcoa.id$V2,method='jaccard')
+adonis.pair(vegdist(og.pa.met.pcoa1,method='jaccard'),as.factor(pcoa.id$V2),nper=999,corr.method='fdr')
+
+#setup PCoA by jaccard dissimiarity
+jaccard.pcoa = capscale(og.pa.met.pcoa1~1,distance='jaccard')
+head(summary(jaccard.pcoa))
+biplot(jaccard.pcoa)
+biplot(jaccard.pcoa,display="sites")
+
+jaccard.pcoa.axes <- data.frame(scores(jaccard.pcoa, display = "sites"))
+jaccard.pcoa.loading <- data.frame(scores(jaccard.pcoa,display = 'species'))
+
+##prelim graph by order
+ggplot(data = jaccard.pcoa.axes, aes(MDS1, MDS2)) + 
+  geom_point(aes(fill = pcoa.id$V2), colour="black", pch = 21,size = 5, stroke =1) +
+  theme_bw(base_size = 16) +
+  xlab("PC1 (42%)") +
+  ylab("PC2 (28%)") +
+  #scale_y_continuous(limits=c(-1.2,0.8),breaks = c(-1.2,-0.8,-0.4,0,0.4,0.8))+
+  #scale_x_continuous(limits = c(-1.3,0.7),breaks=c(seq(-1.3,0.7,by=0.5)))+
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank())
+```
+
+```{r}
+#all of the orthogroups found in all 96 taxa
+og.pa.pcoa = read.delim("/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups.GeneCount.tsv")
+row.names(og.pa.pcoa) <- og.pa.pcoa$Orthogroup
+og.pa.pcoa1 = decostand(og.pa.pcoa[,2:97],method='pa')
+
+#subset to those with three or more genomes present in a strain
+og.pa.pcoa1$Total = rowSums(og.pa.pcoa1)
+og.pa.pcoa2 <- t(subset(og.pa.pcoa1,Total>2,select=colnames(og.pa.pcoa1[,1:96])))
+
+for(i in 1:nrow(og.pa.pcoa2)) {
+  for(j in 1:nrow(rename)) {
+    if(grepl(rename[j,8],row.names(og.pa.pcoa2)[i])) {
+      row.names(og.pa.pcoa2)[i] <- rename[j,10]
+    }
+  }
+}
+
+
+pcoa.id = as.data.frame(matrix(nrow=96,ncol=2))
+
+for(i in 1:96) {
+  pcoa.id[i,1] <- row.names(og.pa.pcoa2)[i]
+  pcoa.id[i,2] <- subset(rename,tip_new %in% row.names(og.pa.pcoa2)[i],select=Order)
+}
+
+write.csv(og.pa.pcoa2,"/Users/johnmcmullen/Box\ Sync/Cornell_jgm/Douglas\ Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_pa_3plus_forpcoa.csv")
+
+#variation by taxonomic grouping with PERMANOVA
+adonis(og.pa.pcoa2 ~ pcoa.id$V2,method='jaccard')
+adonis.pair(vegdist(og.pa.pcoa2,method='jaccard'),as.factor(pcoa.id$V2),nper=999,corr.method='fdr')
+
+#setup PCoA by jaccard dissimiarity
+jaccard2.pcoa = capscale(og.pa.pcoa2~1,distance='jaccard')
+head(summary(jaccard2.pcoa))
+biplot(jaccard2.pcoa)
+biplot(jaccard2.pcoa,display="sites")
+
+jaccard2.pcoa.axes <- data.frame(scores(jaccard2.pcoa, display = "sites"))
+jaccard2.pcoa.loading <- data.frame(scores(jaccard2.pcoa,display = 'species'))
+
+##prelim graph by order
+ggplot(data = jaccard2.pcoa.axes, aes(MDS1, MDS2)) + 
+  geom_point(aes(fill = pcoa.id$V2), colour="black", pch = 21,size = 5, stroke =1) +
+  theme_bw(base_size = 16) +
+  xlab("PC1 (35%)") +
+  ylab("PC2 (23%)") +
+  #scale_y_continuous(limits=c(-1.2,0.8),breaks = c(-1.2,-0.8,-0.4,0,0.4,0.8))+
+  #scale_x_continuous(limits = c(-1.3,0.7),breaks=c(seq(-1.3,0.7,by=0.5)))+
+  theme_bw(base_size = 30) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank())
+```
+
+```{r}
+#correlate the two pcoas on the orthogroups with protest
+plot(procrustes(jaccard.pcoa,jaccard2.pcoa))
+protest(jaccard.pcoa,jaccard2.pcoa)
+```
+
+#Fig. S6 pangenome distribution gene counts by sequence diversity
+##Fig. S6A rarefraction curves
+#rarefraction curves
+```{r}
+#roary output for new genomes in pangenome size
+Ath.rc = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/Ath_pangenome_rarefraction.csv")
+Gc.rc = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/Gc_pangenome_rarefraction.csv")
+Gk.rc = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/Gk_pangenome_rarefraction.csv")
+LAb.rc = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/LAb_pangenome_rarefraction.csv")
+LApl.rc = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/LApl_pangenome_rarefraction.csv")
+PRr.rc = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/PRr_pangenome_rarefraction.csv")
+T.rc = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Pangenome/T_pangenome_rarefraction.csv")
+
+predict_gene_count = function(x,y) {
+  alpha = exp(x$coefficients[1])
+  m = x$coefficients[2]
+  data.predict = matrix(ncol=2,nrow=length(y))
+  for(i in 1:length(y)){
+    data.predict[i,1] <- y[i]
+    data.predict[i,2] <- (y[i]^m)*alpha
+  }
+  return(data.predict)
+}
+
+Ath.mdl = lm(log(Gene)~log(Genome),data=Ath.rc)
+summary(Ath.mdl)
+Ath.seq = unique(Ath.rc$Genome)
+Ath.predict = as.data.frame(predict_gene_count(Ath.mdl,Ath.seq))
+
+Gc.mdl = lm(log(Gene)~log(Genome),data=Gc.rc)
+summary(Gc.mdl)
+Gc.seq = unique(Gc.rc$Genome)
+Gc.predict = as.data.frame(predict_gene_count(Gc.mdl,Gc.seq))
+
+Gk.mdl = lm(log(Gene)~log(Genome),data=Gk.rc)
+summary(Gk.mdl)
+Gk.seq = unique(Gk.rc$Genome)
+Gk.predict = as.data.frame(predict_gene_count(Gk.mdl,Gk.seq))
+
+LAb.mdl = lm(log(Gene)~log(Genome),data=LAb.rc)
+summary(LAb.mdl)
+LAb.seq = unique(LAb.rc$Genome)
+LAb.predict = as.data.frame(predict_gene_count(LAb.mdl,LAb.seq))
+
+LApl.mdl = lm(log(Gene)~log(Genome),data=LApl.rc)
+summary(LApl.mdl)
+LApl.seq = unique(LApl.rc$Genome)
+LApl.predict = as.data.frame(predict_gene_count(LApl.mdl,LApl.seq))
+
+PRr.mdl = lm(log(Gene)~log(Genome),data=PRr.rc)
+summary(PRr.mdl)
+PRr.seq = unique(PRr.rc$Genome)
+PRr.predict = as.data.frame(predict_gene_count(PRr.mdl,PRr.seq))
+
+T.mdl = lm(log(Gene)~log(Genome),data=T.rc)
+summary(T.mdl)
+T.seq = unique(T.rc$Genome)
+T.predict = as.data.frame(predict_gene_count(T.mdl,T.seq))
+
+ggplot()+
+  geom_line(data=Ath.predict,aes(x=V1,y=V2)) +
+  geom_line(data=Gc.predict,aes(x=V1,y=V2)) +
+  geom_line(data=Gk.predict,aes(x=V1,y=V2)) +
+  geom_line(data=LAb.predict,aes(x=V1,y=V2)) +
+  geom_line(data=LApl.predict,aes(x=V1,y=V2)) +
+  geom_line(data=PRr.predict,aes(x=V1,y=V2)) +
+  geom_line(data=T.predict,aes(x=V1,y=V2)) +
+  ylab('Gene count') +
+  xlab('No. of genomes') +
+  scale_y_continuous(limits = c(250,550),breaks=seq(250,550,by=100))+
+  scale_x_continuous(limits = c(1,13),breaks=seq(1,13,by=1))+
+  theme_bw(base_size = 25) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+  
+```
+
+##Fig. S6BC correlations between counts and diversity
+```{r}
+#Gene counts
+pan.dist$Pangenome = factor(pan.dist$Pangenome,levels=c('Total','Core','Accessory'))
+ggplot(pan.dist, aes(Pangenome, Number)) +
+  geom_col() +
+  ylab('Gene count') +
+  scale_y_continuous(limits = c(0,600),breaks=seq(0,600,by=300))+
+  facet_grid(Species~.,scales='free')+
+  theme_bw(base_size = 20) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.title.x = element_blank(),axis.text.x=element_text(size=rel(0.8),angle = 45,hjust=1),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)),strip.text.y=element_text(angle=0,size=rel(0.75)))
+
+cor.test(pan.dist[pan.dist$Pangenome=='Accessory',4],pan.dist[pan.dist$Pangenome=='Accessory',3])
+cor.test(pan.dist[pan.dist$Pangenome=='Core',4],pan.dist[pan.dist$Pangenome=='Core',3])
+cor.test(pan.dist[pan.dist$Pangenome=='Total',4],pan.dist[pan.dist$Pangenome=='Total',3])
+
+ggplot(pan.dist, aes(Residue_div, Number,shape=Pangenome)) +
+  geom_point(size=5) +
+  ylab('Gene count') +
+  xlab('Residue diversity (mean H)') +
+  scale_y_continuous(limits = c(0,600),breaks=seq(0,600,by=300))+
+  scale_x_continuous(limits = c(0,0.01),breaks=seq(0,0.01,by=0.005))+
+  facet_grid(.~Pangenome,scales='free')+
+  theme_bw(base_size = 25) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+
+cor.test(pan.dist[pan.dist$Pangenome=='Accessory',5],pan.dist[pan.dist$Pangenome=='Accessory',3])
+cor.test(pan.dist[pan.dist$Pangenome=='Core',5],pan.dist[pan.dist$Pangenome=='Core',3])
+cor.test(pan.dist[pan.dist$Pangenome=='Total',5],pan.dist[pan.dist$Pangenome=='Total',3])
+
+ggplot(pan.dist, aes(nuc_div, Number,shape=Pangenome)) +
+  geom_point(size=5) +
+  ylab('Gene count') +
+  xlab('Nucleotide diversity (\U220F)') +
+  facet_grid(.~Pangenome,scales='free')+
+  scale_y_continuous(limits = c(0,600),breaks=seq(0,600,by=300))+
+  scale_x_continuous(limits = c(0,0.003),breaks=seq(0,0.003,by=0.001))+
+  theme_bw(base_size = 25) +
+  theme(aspect.ratio=1,panel.grid = element_blank(),
+        panel.border = element_rect(size = 1, colour = "black"),
+        legend.title = element_blank(),axis.text.x=element_text(size=rel(0.9)),axis.text.y=element_text(size=rel(0.9)),axis.title.y=element_text(size=rel(0.9)))
+```
+
+#Fig. S8 relative count in RAST functions heatmap
+###heatmap on proportional data
+```{r}
+subs.p2 <- cbind(ids,subs.p)
+subs.p3 = arrange(subs.p2,Order,tip)
+subs.p4 = subs.p3[,9:46]
+row.names(subs.p4) <- subs.p3$tip
+subs.p4 = t(subs.p4)
+
+#heatmap.pdf
+pheatmap(subs.p4,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,legend=FALSE,fontsize=7,cellheight = 7,show_rownames=FALSE,show_colnames = FALSE)
+#heatmap2.pdf
+pheatmap(subs.p4,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,legend=TRUE,show_rownames=TRUE,show_colnames = TRUE)
+#heatmap3.pdf
+pheatmap(subs.p4,treeheight_row = 0, treeheight_col = 0,cluster_rows=FALSE, cluster_cols=FALSE,show_rownames=FALSE,show_colnames = FALSE)
+
+pdf("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/heatmap.pdf")
+heatmap.2(subs.n,scale='none',trace='none',dendrogram='none',Rowv=FALSE,Colv=FALSE,key=FALSE)
+dev.off()
+```
+
+#Table S5 Fisher test for presence/absence of orthogropus among the pangenome taxa
+```{r}
+#melt the data for all the ogs presence absence, then make a list for each of the ogs. From that run fisher's extact test, find significance
+
+og.pan.met = read.csv("/Users/johnmcmullen/Box Sync/Cornell_jgm/Douglas Lab/Research/Genomes/2020_assemblies/Analysis/Orthofinder_96sub/Results_Aug19_1/Orthogroups/Orthogroups_met_pa_pangenome_3PLUS_comparison.csv")
+
+og.pan.met1 = og.pan.met[og.pan.met$OGs%in%ogs.met.final.pangenome,]
+
+og.names = unique(og.pan.met1$OGs)
+og.sig = as.data.frame(matrix(ncol=3,nrow=length(og.names)))
+
+for(i in 1:length(og.names)) {
+  og.sig[i,1] <- og.names[i]
+  x=subset(og.pan.met1,OGs %in% og.names[i],select=colnames(og.pan.met1[,3:4]))
+  og.sig[i,2] <- fisher.test(as.matrix(x))$p.value
+}
+
+og.sig$V3 = p.adjust(og.sig$V2,method='fdr')
+
+og.sig1 = og.sig[og.sig$V3<0.05,]
+
+View(og.pan.met[og.pan.met1$orthogroup %in% og.sig1$V1,])
+
+```
